@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<!--
+  Content Security Policy (same locked-down posture as the Chess/Math tutors):
+  * default-src none  : nothing loads unless explicitly allowed.
+  * script-src sha256 : ONLY this app's own inline code (pinned by hash) runs.
+  * connect-src none  : no network of any kind — nothing leaves the device.
+  * img/font/object/worker none : no external resources, no eval, no workers.
+  The whole app is offline, plain JavaScript; progress is saved in the note.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-nqJbaO3Y4GXNKZQ+YzmYWIsVfySudcMurkl+IaBs8Rk='; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'" />
+<meta name="referrer" content="no-referrer" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>My Day</title>
+<style>
+  :root{
+    --bg: var(--sn-stylekit-background-color, #fff7ed);
+    --fg: var(--sn-stylekit-foreground-color, #1f2937);
+    --panel: var(--sn-stylekit-contrast-background-color, #ffffff);
+    --border: var(--sn-stylekit-border-color, #f0d9b8);
+    --muted: var(--sn-stylekit-neutral-color, #7c6f64);
+    --font: var(--sn-stylekit-editor-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif), "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla", sans-serif;
+    --accent:#f59e0b; --accent2:#fb923c; --sky:#38bdf8; --grape:#a78bfa;
+    --good:#16a34a; --good-bg:#dcfce7; --warn:#d97706; --gold:#f59e0b;
+    --shadow:0 2px 0 rgba(0,0,0,.08);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%}
+  body{background:var(--bg);color:var(--fg);font-family:var(--font);line-height:1.4;-webkit-text-size-adjust:100%}
+  #root{max-width:560px;margin:0 auto;padding:12px 14px 90px}
+  input,textarea,button{font-family:inherit}
+
+  /* header: mascot greeting + stat chips */
+  .hero{display:flex;align-items:center;gap:12px;background:linear-gradient(120deg,#fff7ed,#ffedd5);border:2px solid var(--border);border-radius:20px;padding:12px 14px;margin-bottom:12px}
+  .mascot{font-size:2.6rem;line-height:1;filter:drop-shadow(0 2px 0 rgba(0,0,0,.06))}
+  .hellowrap{flex:1;min-width:0}
+  .hello{font-weight:800;font-size:1.15rem}
+  .mascot-say{font-size:.85rem;color:var(--muted)}
+  .chips{display:flex;gap:8px;margin-bottom:14px}
+  .chip{flex:1;background:var(--panel);border:2px solid var(--border);border-radius:16px;padding:9px 6px;text-align:center}
+  .chip .cn{font-size:1.2rem;font-weight:800}
+  .chip .cl{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+  .chip.streak .cn{color:var(--accent2)}
+  .chip.level .cn{color:var(--grape)}
+  .chip.points .cn{color:var(--sky)}
+
+  /* level / xp bar */
+  .levelbar{background:var(--panel);border:2px solid var(--border);border-radius:16px;padding:10px 12px;margin-bottom:14px}
+  .levelrow{display:flex;justify-content:space-between;font-weight:800;font-size:.9rem}
+  .levelrow .sub{color:var(--muted);font-weight:600}
+  .xpbar{height:12px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:6px}
+  .xpfill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:999px;transition:width .3s}
+
+  /* cards */
+  .card{background:var(--panel);border:2px solid var(--border);border-radius:20px;padding:16px;margin-bottom:14px;box-shadow:var(--shadow)}
+  .card h2{margin:0 0 4px;font-size:1.05rem}
+  .card .sub{color:var(--muted);font-size:.82rem;margin-bottom:10px}
+  .section-title{font-weight:800;margin:2px 0 8px;font-size:1.1rem;display:flex;align-items:center;gap:8px}
+
+  /* step ring */
+  .ring-wrap{display:flex;align-items:center;gap:16px}
+  .ring{width:120px;height:120px;flex:0 0 auto}
+  .ring .bg{stroke:var(--border)}
+  .ring .fg{stroke:url(#rg);stroke-linecap:round;transition:stroke-dashoffset .4s}
+  .ring-mid{font-weight:800}
+  .ring-steps{flex:1}
+  .ring-steps label{font-size:.82rem;color:var(--muted);font-weight:700}
+  .stepinput{width:100%;font-size:1.6rem;font-weight:800;border:2px solid var(--border);border-radius:14px;padding:10px 12px;margin-top:4px;background:var(--bg);color:var(--fg);text-align:center}
+  .goaltag{font-size:.8rem;color:var(--muted);margin-top:6px}
+  .stepbtns{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .stepbtn{border:2px solid var(--border);background:var(--panel);color:var(--fg);border-radius:999px;padding:6px 10px;font-weight:800;cursor:pointer;font-size:.82rem}
+  .stepbtn:active{transform:translateY(1px)}
+
+  /* rating faces */
+  .faces{display:flex;justify-content:space-between;gap:6px}
+  .face{flex:1;font-size:1.9rem;background:var(--bg);border:2px solid var(--border);border-radius:16px;padding:8px 0;cursor:pointer;line-height:1;transition:transform .1s}
+  .face:active{transform:translateY(1px)}
+  .face.on{border-color:var(--accent);background:#fffbeb;transform:scale(1.08)}
+
+  /* goals checklist */
+  .goals-list{display:flex;flex-direction:column;gap:8px}
+  .goal{display:flex;align-items:center;gap:10px;border:2px solid var(--border);background:var(--bg);border-radius:14px;padding:10px 12px;cursor:pointer}
+  .goal.done{border-color:var(--good);background:var(--good-bg)}
+  .goal .ge{font-size:1.4rem}
+  .goal .gn{flex:1;font-weight:700}
+  .goal .gcheck{font-size:1.3rem;color:var(--muted)}
+  .goal.done .gcheck{color:var(--good)}
+  .empty{color:var(--muted);text-align:center;padding:14px;font-size:.9rem}
+
+  /* text inputs */
+  .field label{font-weight:800;display:block;margin:2px 0 6px}
+  .field textarea, .field input[type=text]{width:100%;border:2px solid var(--border);border-radius:14px;padding:10px 12px;background:var(--bg);color:var(--fg);font-size:1rem;resize:vertical}
+  .field textarea{min-height:64px}
+  .field + .field{margin-top:12px}
+
+  /* buttons */
+  .primary{border:none;background:linear-gradient(120deg,var(--accent),var(--accent2));color:#fff;font-weight:800;border-radius:16px;padding:15px 22px;cursor:pointer;font-size:1.1rem;box-shadow:var(--shadow);width:100%}
+  .primary:active{transform:translateY(2px)}
+  .primary.saved{background:var(--good)}
+  .ghost{border:2px solid var(--border);background:var(--panel);color:var(--fg);font-weight:800;border-radius:14px;padding:11px 16px;cursor:pointer}
+  .ghost:active{transform:translateY(1px)}
+  .rowbtns{display:flex;gap:10px}
+  .rowbtns>*{flex:1}
+
+  /* bottom nav */
+  .nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--panel);border-top:2px solid var(--border);max-width:560px;margin:0 auto;z-index:10}
+  .navbtn{flex:1;border:none;background:none;color:var(--muted);padding:8px 0 10px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;font-weight:700}
+  .navbtn .ni{font-size:1.4rem}
+  .navbtn .nl{font-size:.68rem}
+  .navbtn.on{color:var(--accent2)}
+  .navbtn.on .ni{transform:translateY(-2px)}
+
+  /* toast (rewards) */
+  .toast{background:linear-gradient(90deg,#fef3c7,#fde68a);border:2px solid var(--gold);color:#7c2d12;border-radius:16px;padding:12px 14px;margin-bottom:12px;font-weight:800;text-align:center;animation:pop .25s ease}
+  @keyframes pop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
+
+  /* history */
+  .hlist{display:flex;flex-direction:column;gap:8px}
+  .hrow{display:flex;align-items:center;gap:12px;border:2px solid var(--border);background:var(--panel);border-radius:14px;padding:10px 12px;cursor:pointer}
+  .hrow .hface{font-size:1.5rem}
+  .hrow .hinfo{flex:1}
+  .hrow .hdate{font-weight:800}
+  .hrow .hsteps{font-size:.8rem;color:var(--muted)}
+  .hrow .hgo{color:var(--muted);font-weight:800}
+
+  /* badges */
+  .badges{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .badge{display:flex;align-items:center;gap:8px;border:2px solid var(--border);border-radius:14px;padding:10px;color:var(--muted);opacity:.65;background:var(--panel)}
+  .badge.got{opacity:1;color:var(--fg);border-color:var(--gold)}
+  .badge .be{font-size:1.5rem}
+  .badge .bn{font-size:.82rem;font-weight:800}
+  .badge .bd{font-size:.7rem;color:var(--muted)}
+
+  /* rank ladder */
+  .ladder{display:flex;flex-direction:column;gap:6px}
+  .rl{display:flex;justify-content:space-between;align-items:center;border:2px solid var(--border);border-radius:12px;padding:9px 12px;font-weight:700;color:var(--muted)}
+  .rl.got{color:var(--fg);border-color:var(--grape);background:var(--panel)}
+  .rl.now{border-color:var(--accent);background:#fffbeb}
+
+  /* goal editor */
+  .goaledit{display:flex;flex-direction:column;gap:8px;border:2px dashed var(--border);border-radius:16px;padding:12px;margin-top:10px}
+  .emojipick{display:flex;gap:6px;flex-wrap:wrap}
+  .ep{font-size:1.3rem;border:2px solid var(--border);background:var(--panel);border-radius:12px;padding:4px 8px;cursor:pointer}
+  .ep.on{border-color:var(--accent);background:#fffbeb}
+  .del{border:none;background:none;color:#dc2626;font-weight:800;cursor:pointer;font-size:.85rem}
+  .goalmanage{display:flex;align-items:center;gap:10px;border:2px solid var(--border);border-radius:14px;padding:10px 12px;background:var(--panel)}
+  .goalmanage .gn{flex:1;font-weight:700}
+
+  .backbar{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .backbar h1{font-size:1.2rem;margin:0}
+  .small{font-size:.8rem;color:var(--muted)}
+  .center{text-align:center}
+</style>
+</head>
+<body>
+  <div id="root">Loading…</div>
+  <script>
+(()=>{var ot=Object.create,J=Object.defineProperty,rt=Object.getOwnPropertyDescriptor,dt=Object.getOwnPropertyNames,lt=Object.getPrototypeOf,ct=Object.prototype.hasOwnProperty;var W=(t,e)=>()=>{try{return e||t((e={exports:{}}).exports,e),e.exports}catch(a){throw e=0,a}},mt=(t,e,a,n)=>{if(e&&typeof e=="object"||typeof e=="function")for(let r of dt(e))!ct.call(t,r)&&r!==a&&J(t,r,{get:()=>e[r],enumerable:!(n=rt(e,r))||n.enumerable});return t},K=(t,e,a)=>(a=t!=null?ot(lt(t)):{},mt(e||!t||!t.__esModule?J(a,"default",{value:t,enumerable:!0}):a,t));var pt=W((t,e)=>{(function(a,n){if(typeof t=="object"&&typeof e=="object")e.exports=n();else if(typeof define=="function"&&define.amd)define([],n);else{var r=n();for(var u in r)(typeof t=="object"?t:a)[u]=r[u]}})(self,()=>(()=>{"use strict";var a,n,r={d:(s,o)=>{for(var l in o)r.o(o,l)&&!r.o(s,l)&&Object.defineProperty(s,l,{enumerable:!0,get:o[l]})},o:(s,o)=>Object.prototype.hasOwnProperty.call(s,o)},u={};r.d(u,{default:()=>h}),function(s){s.StreamContextItem="stream-context-item",s.SaveItems="save-items",s.ComponentRegistered="component-registered",s.ActivateThemes="themes",s.ThemesActivated="themes-activated",s.SetComponentData="set-component-data"}(a||(a={})),function(s){s.Component="component"}(n||(n={}));let h=new class{constructor(){this.component={activeThemes:[],acceptsThemes:!0},this.sentMessages=[],this.messageQueue=[],this.subscriptions=[],this.generateNotePreview=!0}initialize(s={}){if(this.contentWindow)throw"Cannot initialize mediator more than once";this.contentWindow=window,this.coallesedSavingDelay=s.debounceSave!==void 0?s.debounceSave:250,this.registerMessageHandler(),this.postMessage(a.StreamContextItem,{},o=>{let{item:l}=o;(!this.lastStreamedItem||this.lastStreamedItem.uuid!==l.uuid)&&this.pendingSaveTimeout&&(clearTimeout(this.pendingSaveTimeout),this.performSavingOfItems(this.pendingSaveParams),this.pendingSaveTimeout=void 0,this.pendingSaveParams=void 0),this.lastStreamedItem=l,this.lastStreamedItem.isMetadataUpdate||this.subscriptions.forEach(c=>{c(this.text,this.meta)})})}subscribe(s){return this.subscriptions.push(s),this.lastStreamedItem&&setTimeout(()=>{s(this.text,this.meta)}),()=>{let o=this.subscriptions.indexOf(s);o>=0&&this.subscriptions.splice(o,1)}}get text(){var s,o;return this.checkNoteExists(),((o=(s=this.lastStreamedItem)===null||s===void 0?void 0:s.content)===null||o===void 0?void 0:o.text)||""}get meta(){var s;return this.checkNoteExists(),!((s=this.lastStreamedItem)===null||s===void 0)&&s.content?this.lastStreamedItem.content.appData[this.lastStreamedItem.content.editorIdentifier]:{}}get extensionMeta(){return this.component.data}get locked(){var s,o;return this.checkNoteExists(),(o=(s=this.lastStreamedItem)===null||s===void 0?void 0:s.content)===null||o===void 0?void 0:o.appData["org.standardnotes.sn"].locked}get preview(){var s,o;return this.checkNoteExists(),(o=(s=this.lastStreamedItem)===null||s===void 0?void 0:s.content)===null||o===void 0?void 0:o.preview_plain}set text(s){this.checkNoteExists(),this.lastStreamedItem.content.text=s,this.saveNote(this.lastStreamedItem)}set preview(s){this.checkNoteExists(),this.generateNotePreview=!1,this.lastStreamedItem.content.preview_plain=s}set meta(s){this.checkNoteExists(),this.lastStreamedItem.content.appData[this.lastStreamedItem.content.editorIdentifier]=s,this.saveNote(this.lastStreamedItem)}set extensionMeta(s){this.component.data=s,this.postMessage(a.SetComponentData,{componentData:s})}registerMessageHandler(){this.messageHandler=s=>{let{data:o}=s,l=(c=>{if(typeof c!="string")return!1;try{let p=JSON.parse(c),v=Object.prototype.toString.call(p);return v==="[object Object]"||v==="[object Array]"}catch{return!1}})(o)?JSON.parse(o):o;l&&this.handleMessage(l)},this.contentWindow.document.addEventListener("message",this.messageHandler,!1),this.contentWindow.addEventListener("message",this.messageHandler,!1)}handleMessage(s){var o,l;switch(s.action){case a.ComponentRegistered:this.component.sessionKey=s.sessionKey,s.componentData&&(this.component.data=s.componentData),this.onReady(s.data);break;case a.ActivateThemes:this.activateThemes(s.data.themes);break;default:{if(!s.original)return;let c=(o=this.sentMessages)===null||o===void 0?void 0:o.filter(p=>{var v;return p.messageId===((v=s.original)===null||v===void 0?void 0:v.messageId)})[0];if(!c)return;(l=c==null?void 0:c.callback)===null||l===void 0||l.call(c,s.data);break}}}onReady(s){this.component.environment=s.environment,this.component.platform=s.platform,this.component.uuid=s.uuid;for(let o of this.messageQueue)this.postMessage(o.action,o.data,o.callback);this.messageQueue=[],this.activateThemes(s.activeThemeUrls||[]),this.postMessage(a.ThemesActivated,{})}get isRunningInDesktopApplication(){return this.component.environment==="desktop"}get isRunningInMobileApplication(){return this.component.environment==="mobile"}get isRunningInBrowser(){return this.component.environment==="web"}postMessage(s,o,l){if(!this.component.sessionKey)return void this.messageQueue.push({action:s,data:o,api:n.Component,callback:l});let c={action:s,data:o,messageId:this.generateUUID(),sessionKey:this.component.sessionKey,api:n.Component},p=JSON.parse(JSON.stringify(c)),v;p.callback=l,this.sentMessages.push(p),v=this.isRunningInMobileApplication?JSON.stringify(c):c,this.contentWindow.parent.postMessage(v,"*")}activateThemes(s=[]){if(!this.component.acceptsThemes)return;let{activeThemes:o}=this.component;if(o&&o.sort().toString()==s.sort().toString())return;let l=s,c=[];for(let p of o)s.includes(p)?l=l.filter(v=>v!==p):c.push(p);for(let p of c)this.deactivateTheme(p);this.component.activeThemes=s;for(let p of l){if(!p)continue;let v=p.endsWith("/org.standardnotes.theme-focus/index.css")?"https://app.standardnotes.com/components/assets/org.standardnotes.theme-focus/index.css":p,$=this.contentWindow.document.createElement("link");$.id=btoa(p),$.href=v,$.type="text/css",$.rel="stylesheet",$.media="screen,print",$.className="custom-theme",this.contentWindow.document.getElementsByTagName("head")[0].appendChild($)}this.onThemesChangeCallback&&this.onThemesChangeCallback()}themeElementForUrl(s){return Array.from(this.contentWindow.document.getElementsByClassName("custom-theme")).slice().find(o=>o.id==btoa(s))}deactivateTheme(s){let o=this.themeElementForUrl(s);o&&o.parentNode&&(o.setAttribute("disabled","true"),o.parentNode.removeChild(o))}generateUUID(){return crypto.randomUUID()}get platform(){return this.component.platform}get environment(){return this.component.environment}performSavingOfItems({items:s,callback:o}){this.generateNotePreview&&(s[0].content.preview_plain=((c,p=50)=>c.length<=p?c:c.substring(0,p)+"...")(s[0].content.text));let l=[];for(let c of s)l.push(this.jsonObjectForItem(c));this.postMessage(a.SaveItems,{items:l},()=>{o==null||o()})}saveNote(s,o){let l=[s];if(this.pendingSaveItems||(this.pendingSaveItems=[]),this.coallesedSavingDelay){this.pendingSaveTimeout&&clearTimeout(this.pendingSaveTimeout);let c=l.map(v=>v.uuid),p=this.pendingSaveItems.filter(v=>!c.includes(v.uuid));this.pendingSaveItems=p.concat(l),this.pendingSaveParams={items:this.pendingSaveItems,callback:o},this.pendingSaveTimeout=setTimeout(()=>{this.performSavingOfItems(this.pendingSaveParams),this.pendingSaveItems=[],this.pendingSaveTimeout=void 0,this.pendingSaveParams=null},this.coallesedSavingDelay)}else this.performSavingOfItems({items:l,callback:o})}jsonObjectForItem(s){let o=Object.assign({},s);return o.children=null,o.parent=null,o}checkNoteExists(){if(!this.lastStreamedItem)throw"Trying to interact with note before it is received from Standard Notes. Use subscribe function."}};return u.default})())}),w=K(pt());var T=(t=new Date)=>{let e=t.getFullYear(),a=String(t.getMonth()+1).padStart(2,"0"),n=String(t.getDate()).padStart(2,"0");return`${e}-${a}-${n}`},U=t=>typeof t=="string"&&/^\d{4}-\d{2}-\d{2}$/.test(t),vt=(t,e)=>Math.round((Date.parse(e+"T00:00:00")-Date.parse(t+"T00:00:00"))/864e5),F=t=>{let[e,a,n]=t.split("-").map(Number);return new Date(e,a-1,n).toLocaleDateString(void 0,{weekday:"short",month:"short",day:"numeric"})},m=t=>String(t==null?"":t).replace(/[&<>"']/g,e=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[e]),k=(t,e,a,n)=>{let r=Math.round(Number(t));return Number.isFinite(r)?Math.max(e,Math.min(a,r)):n},b=(t,e)=>(typeof t=="string"?t:"").slice(0,e),P=(t,e)=>Array.isArray(t)?t.slice(0,e):[],_={emoji:"\u2600\uFE0F",name:"Sunny"},D=["\u{1F61E}","\u{1F615}","\u{1F642}","\u{1F604}","\u{1F929}"],Q=["\u2B50","\u{1F4DA}","\u{1F9B7}","\u{1F6CF}\uFE0F","\u{1F95B}","\u{1F3C3}","\u{1F9F9}","\u{1F415}","\u{1F3B8}","\u{1F3A8}","\u{1F64F}","\u{1F4A7}"],x=[{at:0,emoji:"\u{1F331}",name:"Sprout"},{at:50,emoji:"\u2B50",name:"Star"},{at:150,emoji:"\u{1F680}",name:"Rocket"},{at:300,emoji:"\u{1F9B8}",name:"Hero"},{at:500,emoji:"\u{1F3C6}",name:"Champion"},{at:800,emoji:"\u{1F451}",name:"Legend"},{at:1200,emoji:"\u{1F308}",name:"Superstar"}],I=t=>{let e=x[0];for(let a of x)t>=a.at&&(e=a);return e},Z=t=>x.find(e=>e.at>t)||null;function ut(){return{version:1,name:"Ricky",points:0,streak:0,bestStreak:0,lastSavedDate:"",stepGoal:8e3,goals:[],days:{},badges:[],settings:{mascot:!0}}}function gt(t){if(!t||typeof t!="object")return null;let e=b(t.name,40).trim();return e?{id:b(t.id,24)||"g"+Math.random().toString(36).slice(2,9),name:e,emoji:b(t.emoji,8)||"\u2B50"}:null}function ht(t,e){let a=t&&typeof t=="object"?t:{};return{steps:k(a.steps,0,5e5,0),rating:k(a.rating,0,5,0),goalsDone:P(a.goalsDone,50).map(n=>b(n,24)).filter(n=>e.has(n)),wins:b(a.wins,1e3),differently:b(a.differently,1e3),journal:b(a.journal,4e3),savedPoints:k(a.savedPoints,0,1e5,0)}}function M(t){let e=ut(),a=t&&typeof t=="object"?t:{};e.name=b(a.name,24)||"Ricky",e.points=k(a.points,0,1e8,0),e.streak=k(a.streak,0,1e5,0),e.bestStreak=k(a.bestStreak,0,1e5,0),e.lastSavedDate=U(a.lastSavedDate)?a.lastSavedDate:"",e.stepGoal=k(a.stepGoal,100,1e5,8e3),e.goals=P(a.goals,20).map(gt).filter(Boolean);let n=new Set(e.goals.map(h=>h.id));e.days=Object.create(null);let r=a.days&&typeof a.days=="object"?a.days:{},u=Object.keys(r).filter(U).sort().slice(-500);for(let h of u)e.days[h]=ht(r[h],n);return e.badges=P(a.badges,100).map(h=>b(h,32)),e.settings={mascot:!(a.settings&&a.settings.mascot===!1)},e}function q(t,e){let a=10;return t.steps>=e&&e>0&&(a+=10),a+=3*(t.goalsDone?t.goalsDone.length:0),t.rating>0&&(a+=2),(t.wins||"").trim()&&(a+=3),(t.differently||"").trim()&&(a+=3),(t.journal||"").trim().length>=10&&(a+=4),a}function X(t,e){let a=t.lastSavedDate;return a===e?t.streak:a&&vt(a,e)===1?t.streak+1:1}var j=t=>Object.values(t.days),A=[{id:"first_day",emoji:"\u{1F31F}",name:"First Day",desc:"Save your first day.",has:t=>j(t).length>=1},{id:"streak_3",emoji:"\u{1F525}",name:"On Fire",desc:"3-day streak.",has:t=>t.bestStreak>=3},{id:"streak_7",emoji:"\u{1F4C5}",name:"Whole Week",desc:"7-day streak.",has:t=>t.bestStreak>=7},{id:"streak_30",emoji:"\u{1F451}",name:"Super Streak",desc:"30-day streak!",has:t=>t.bestStreak>=30},{id:"stepper",emoji:"\u{1F45F}",name:"Goal Getter",desc:"Hit your step goal.",has:t=>j(t).some(e=>t.stepGoal>0&&e.steps>=t.stepGoal)},{id:"goal_setter",emoji:"\u{1F3AF}",name:"Dreamer",desc:"Set a goal of your own.",has:t=>t.goals.length>=1},{id:"goal_10",emoji:"\u2705",name:"Checklist Champ",desc:"Complete 10 goals total.",has:t=>j(t).reduce((e,a)=>e+(a.goalsDone?a.goalsDone.length:0),0)>=10},{id:"writer",emoji:"\u{1F4D3}",name:"Storyteller",desc:"Journal on 5 days.",has:t=>j(t).filter(e=>(e.journal||"").trim().length>=10).length>=5},{id:"reflector",emoji:"\u{1F914}",name:"Thinker",desc:"Reflect on 5 days.",has:t=>j(t).filter(e=>(e.differently||"").trim()).length>=5},{id:"amazing",emoji:"\u{1F929}",name:"Best Day Ever",desc:"Rate a day 5 stars.",has:t=>j(t).some(e=>e.rating===5)}];function z(t){let e=[];for(let a of A)a.has(t)&&!t.badges.includes(a.id)&&(t.badges.push(a.id),e.push(a));return e}function B(t,e){if(e==="saved")return t.streak>=3?`\u{1F525} ${t.streak} days in a row \u2014 you're unstoppable!`:"Great job checking in today! \u2600\uFE0F";if(e==="rated1"||e==="rated2")return"Tomorrow is a brand-new sunny day. \u2600\uFE0F";if(e==="rated5")return"What an AMAZING day! \u{1F31F}";let a=new Date().getHours();return`${a<12?"Good morning":a<18?"Good afternoon":"Good evening"}! Ready to make today great?`}var i=M({}),S="today",et=null,d=null,y=null,E="",R=(t,e,a)=>Math.max(e,Math.min(a,Number.isFinite(t)?t:e)),yt=()=>document.getElementById("root"),f=t=>document.getElementById(t),at=(()=>{try{return window.parent&&window.parent!==window}catch{return!1}})(),st="day-tracker-state-v1",Y=null;function St(){let t=I(i.points),e=T(),a=i.days[e],n=[`My Day \u2014 ${i.name}`,`${t.emoji} ${t.name} \xB7 ${i.points} points \xB7 \u{1F525} ${i.streak} day streak`,`Days logged: ${Object.keys(i.days).length} \xB7 Badges: ${i.badges.length}/${A.length}`];return a&&n.push(`Today: \u{1F45F} ${a.steps} steps${a.rating?" \xB7 "+D[a.rating-1]:""}`),n.join(`
+`)}function bt(){let t=I(i.points);return`${_.emoji} ${i.name} \xB7 ${t.emoji} ${t.name} \xB7 ${i.points} pts \xB7 \u{1F525}${i.streak}`}function C(){if(at)try{w.default.extensionMeta=i,w.default.text=St(),w.default.preview=bt()}catch{}else clearTimeout(Y),Y=setTimeout(()=>{try{localStorage.setItem(st,JSON.stringify(i))}catch{}},150)}function V(t){try{i=M(t)}catch{i=M({})}}function H(){let t=T();if(!d||d.date!==t){let e=i.days[t];d={date:t,steps:e?e.steps:0,rating:e?e.rating:0,goalsDone:new Set(e?e.goalsDone:[]),wins:e?e.wins:"",differently:e?e.differently:"",journal:e?e.journal:""}}}function G(){H(),f("steps")&&(d.steps=R(parseInt((f("steps").value||"0").replace(/[^0-9]/g,""),10)||0,0,5e5)),f("wins")&&(d.wins=f("wins").value.slice(0,1e3)),f("differently")&&(d.differently=f("differently").value.slice(0,1e3)),f("journal")&&(d.journal=f("journal").value.slice(0,4e3))}function tt(){y&&f("goalname")&&(y.name=f("goalname").value.slice(0,40))}function $t(){G();let t=T(),e={steps:d.steps,rating:d.rating,goalsDone:[...d.goalsDone],wins:d.wins,differently:d.differently,journal:d.journal,savedPoints:0},a=i.days[t]?i.days[t].savedPoints:0,n=q(e,i.stepGoal);e.savedPoints=n;let r=X(i,t);i.streak=r,r>i.bestStreak&&(i.bestStreak=r),i.lastSavedDate=t,i.days[t]=e,i.points+=n-a;let u=z(i),h=n-a;if(u.length)E=`\u{1F3C5} New badge: ${u.map(s=>s.emoji+" "+s.name).join(", ")}!`;else{let s=e.rating===5?"rated5":e.rating&&e.rating<=2?"rated1":"saved";E=B(i,s)+(h>0?`  +${h} pts`:"")}C(),g()}function nt(t,e){let n=2*Math.PI*52,r=e>0?Math.min(t/e,1):0,u=n*(1-r),h=Math.round(r*100);return`<svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+    <defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f59e0b"/><stop offset="1" stop-color="#fb923c"/></linearGradient></defs>
+    <circle class="bg" cx="60" cy="60" r="52" fill="none" stroke-width="12"/>
+    <circle class="fg" cx="60" cy="60" r="52" fill="none" stroke-width="12" stroke-dasharray="${n.toFixed(1)}" stroke-dashoffset="${u.toFixed(1)}" transform="rotate(-90 60 60)"/>
+    <text x="60" y="58" text-anchor="middle" font-size="22" font-weight="800" fill="currentColor">${h}%</text>
+    <text x="60" y="76" text-anchor="middle" font-size="10" fill="currentColor" opacity=".6">of goal</text>
+  </svg>`}function N(){let t=I(i.points),e=Z(i.points),a=t.at,n=e?e.at:t.at+1,r=e?R((i.points-a)/(n-a),0,1):1;return`
+  <div class="hero">
+    <div class="mascot">${_.emoji}</div>
+    <div class="hellowrap">
+      <div class="hello">Hi ${m(i.name)}!</div>
+      <div class="mascot-say">${m(B(i,"greet"))}</div>
+    </div>
+  </div>
+  <div class="chips">
+    <div class="chip streak"><div class="cn">\u{1F525} ${i.streak}</div><div class="cl">Streak</div></div>
+    <div class="chip level"><div class="cn">${t.emoji}</div><div class="cl">${m(t.name)}</div></div>
+    <div class="chip points"><div class="cn">${i.points}</div><div class="cl">Points</div></div>
+  </div>
+  <div class="levelbar">
+    <div class="levelrow"><span>${t.emoji} ${m(t.name)}</span>
+      <span class="sub">${e?`${n-i.points} pts to ${e.emoji} ${m(e.name)}`:"Max rank! \u{1F308}"}</span></div>
+    <div class="xpbar"><div class="xpfill" style="width:${Math.round(r*100)}%"></div></div>
+  </div>`}function wt(){let t=(e,a,n)=>`<button class="navbtn ${S===e?"on":""}" data-action="nav" data-nav="${e}"><span class="ni">${a}</span><span class="nl">${n}</span></button>`;return`<div class="nav">${t("today","\u{1F4C5}","Today")}${t("goals","\u{1F3AF}","Goals")}${t("history","\u{1F4D6}","History")}${t("rewards","\u{1F3C6}","Rewards")}</div>`}function kt(){H();let t=i.goals.length?i.goals.map(a=>{let n=d.goalsDone.has(a.id);return`<div class="goal ${n?"done":""}" data-action="goal-toggle" data-id="${a.id}"><span class="ge">${a.emoji}</span><span class="gn">${m(a.name)}</span><span class="gcheck">${n?"\u2705":"\u2B1C"}</span></div>`}).join(""):'<div class="empty">No goals yet \u2014 add some on the \u{1F3AF} Goals tab!</div>',e=D.map((a,n)=>`<button class="face ${d.rating===n+1?"on":""}" data-action="set-rating" data-rate="${n+1}">${a}</button>`).join("");return`
+  <div class="card">
+    <div class="section-title">\u{1F45F} Steps today</div>
+    <div class="ring-wrap">
+      ${nt(d.steps,i.stepGoal)}
+      <div class="ring-steps">
+        <label>My steps</label>
+        <input id="steps" class="stepinput" type="number" inputmode="numeric" value="${d.steps||""}" placeholder="0" min="0" max="500000"/>
+        <div class="goaltag">Goal: ${i.stepGoal.toLocaleString()} \u{1F45F}</div>
+        <div class="stepbtns">
+          <button class="stepbtn" data-action="step-add" data-add="1000">+1,000</button>
+          <button class="stepbtn" data-action="step-add" data-add="2000">+2,000</button>
+          <button class="stepbtn" data-action="step-add" data-add="5000">+5,000</button>
+          <button class="stepbtn" data-action="step-clear">Clear</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="section-title">How was your day?</div>
+    <div class="faces">${e}</div>
+  </div>
+  <div class="card">
+    <div class="section-title">\u{1F3AF} My goals today</div>
+    <div class="goals-list">${t}</div>
+  </div>
+  <div class="card">
+    <div class="field"><label>\u{1F31F} What did you do great today?</label><textarea id="wins" placeholder="I was kind to my sister\u2026">${m(d.wins)}</textarea></div>
+    <div class="field" style="margin-top:12px"><label>\u{1F914} One thing you'd do differently?</label><textarea id="differently" placeholder="I'd start my homework earlier\u2026">${m(d.differently)}</textarea></div>
+  </div>
+  <div class="card">
+    <div class="field"><label>\u{1F4D3} Journal</label><textarea id="journal" placeholder="Today I\u2026">${m(d.journal)}</textarea></div>
+  </div>
+  <button class="primary" data-action="save-day">Save my day \u2600\uFE0F</button>`}function jt(){let t=i.goals.length?i.goals.map(a=>`<div class="goalmanage"><span class="ge" style="font-size:1.4rem">${a.emoji}</span><span class="gn">${m(a.name)}</span><button class="del" data-action="goal-remove" data-id="${a.id}">Remove</button></div>`).join(""):'<div class="empty">No goals yet. Add one below! \u{1F447}</div>',e=y?`<div class="goaledit">
+        <div class="small">Pick an icon:</div>
+        <div class="emojipick">${Q.map(a=>`<button class="ep ${y.emoji===a?"on":""}" data-action="goal-emoji" data-emoji="${a}">${a}</button>`).join("")}</div>
+        <input id="goalname" type="text" placeholder="My goal (like: Read 20 minutes)" value="${m(y.name)}" maxlength="40"/>
+        <div class="rowbtns"><button class="ghost" data-action="goal-cancel">Cancel</button><button class="primary" style="padding:12px;font-size:1rem" data-action="goal-save">Add goal</button></div>
+      </div>`:'<button class="ghost" data-action="goal-add-start" style="width:100%;margin-top:10px">\u2795 Add a goal</button>';return`
+  <div class="card">
+    <div class="section-title">\u{1F45F} Step goal</div>
+    <div class="sub">How many steps do you want to reach each day?</div>
+    <input id="stepgoal" type="number" class="stepinput" style="font-size:1.3rem" value="${i.stepGoal}" min="100" max="100000" step="100"/>
+    <button class="ghost" data-action="stepgoal-set" style="width:100%;margin-top:8px">Save step goal</button>
+  </div>
+  <div class="card">
+    <div class="section-title">\u{1F3AF} My goals</div>
+    <div class="sub">Things you want to do every day \u2014 check them off on the Today tab.</div>
+    <div class="goals-list">${t}</div>
+    ${e}
+  </div>`}function it(){let t=Object.keys(i.days).sort().reverse();return t.length?`<div class="card"><div class="section-title">\u{1F4D6} My days</div><div class="hlist">${t.map(a=>{let n=i.days[a],r=n.rating?D[n.rating-1]:"\u2022",u=n.goalsDone.length?` \xB7 \u2705 ${n.goalsDone.length}`:"";return`<div class="hrow" data-action="view-day" data-date="${a}"><span class="hface">${r}</span><span class="hinfo"><span class="hdate">${m(F(a))}</span><span class="hsteps">\u{1F45F} ${n.steps.toLocaleString()} steps${u}</span></span><span class="hgo">\u203A</span></div>`}).join("")}</div></div>`:'<div class="card"><div class="empty">No days saved yet. Check in on the \u{1F4C5} Today tab!</div></div>'}function xt(t){let e=i.days[t];if(!e)return S="history",it();let a=e.goalsDone.map(n=>{let r=i.goals.find(u=>u.id===n);return r?`${r.emoji} ${m(r.name)}`:null}).filter(Boolean);return`
+  <div class="backbar"><button class="ghost" data-action="back">\u2039 Back</button><h1>${m(F(t))}</h1></div>
+  <div class="card"><div class="ring-wrap">${nt(e.steps,i.stepGoal)}
+    <div class="ring-steps"><label>Steps</label><div style="font-size:1.7rem;font-weight:800">${e.steps.toLocaleString()}</div><div class="goaltag">Goal: ${i.stepGoal.toLocaleString()} \u{1F45F}</div></div></div></div>
+  <div class="card"><div class="section-title">How the day felt</div><div style="font-size:2.2rem">${e.rating?D[e.rating-1]:"\u2014"}</div></div>
+  ${a.length?`<div class="card"><div class="section-title">\u2705 Goals done</div><div class="goals-list">${a.map(n=>`<div class="goal done"><span class="gn">${n}</span></div>`).join("")}</div></div>`:""}
+  ${e.wins?`<div class="card"><div class="section-title">\u{1F31F} What I did great</div><div>${m(e.wins)}</div></div>`:""}
+  ${e.differently?`<div class="card"><div class="section-title">\u{1F914} One thing to do differently</div><div>${m(e.differently)}</div></div>`:""}
+  ${e.journal?`<div class="card"><div class="section-title">\u{1F4D3} Journal</div><div style="white-space:pre-wrap">${m(e.journal)}</div></div>`:""}`}function Dt(){let t=I(i.points),e=x.map(n=>`<div class="rl ${i.points>=n.at?"got":""} ${t.name===n.name?"now":""}"><span>${n.emoji} ${m(n.name)}</span><span class="rlxp">${n.at} pts</span></div>`).join(""),a=A.map(n=>{let r=i.badges.includes(n.id);return`<div class="badge ${r?"got":""}"><span class="be">${r?n.emoji:"\u{1F512}"}</span><span><span class="bn">${m(n.name)}</span><br><span class="bd">${m(n.desc)}</span></span></div>`}).join("");return`
+  <div class="card center"><div style="font-size:2.6rem">${t.emoji}</div><div style="font-weight:800;font-size:1.25rem">${m(t.name)}</div>
+    <div class="small">${i.points} points \xB7 \u{1F525} ${i.streak} day streak \xB7 best ${i.bestStreak}</div></div>
+  <div class="card"><div class="section-title">\u{1F3C5} Badges</div><div class="badges">${a}</div></div>
+  <div class="card"><div class="section-title">\u{1F3C6} Ranks</div><div class="ladder">${e}</div></div>
+  <div class="card"><div class="section-title">\u270F\uFE0F My name</div>
+    <input id="nameinput" type="text" class="stepinput" style="font-size:1.1rem" value="${m(i.name)}" maxlength="24"/>
+    <button class="ghost" data-action="set-name" style="width:100%;margin-top:8px">Save name</button></div>`}function g(){let t=yt();if(!t)return;let e=E;E="";let a;S==="goals"?a=N()+jt():S==="history"?a=N()+it():S==="rewards"?a=N()+Dt():S==="day"?a=xt(et):a=N()+kt(),t.innerHTML=(e?`<div class="toast">${m(e)}</div>`:"")+a+(S==="day"?"":wt())}function It(t){let e=t.target.closest?t.target.closest("[data-action]"):null;if(!e)return;switch(e.getAttribute("data-action")){case"nav":return S=e.getAttribute("data-nav"),y=null,g();case"set-rating":return G(),d.rating=parseInt(e.getAttribute("data-rate"),10)||0,g();case"goal-toggle":{G();let n=e.getAttribute("data-id");return d.goalsDone.has(n)?d.goalsDone.delete(n):d.goalsDone.add(n),g()}case"step-add":return G(),d.steps=R(d.steps+(parseInt(e.getAttribute("data-add"),10)||0),0,5e5),g();case"step-clear":return H(),d.steps=0,g();case"save-day":return $t();case"goal-add-start":return y={name:"",emoji:"\u2B50"},g();case"goal-cancel":return y=null,g();case"goal-emoji":return tt(),y.emoji=e.getAttribute("data-emoji"),g();case"goal-save":{tt();let n=(y.name||"").trim();return n&&(i.goals.push({id:"g"+Math.random().toString(36).slice(2,9),name:n.slice(0,40),emoji:y.emoji||"\u2B50"}),y=null,z(i),C()),g()}case"goal-remove":{let n=e.getAttribute("data-id");return i.goals=i.goals.filter(r=>r.id!==n),d&&d.goalsDone.delete(n),C(),g()}case"stepgoal-set":{let n=f("stepgoal");return n&&(i.stepGoal=R(parseInt(n.value||"8000",10)||8e3,100,1e5),C()),g()}case"view-day":return et=e.getAttribute("data-date"),S="day",g();case"back":return S="history",g();case"set-name":{let n=f("nameinput");return n&&(i.name=(n.value||"Ricky").slice(0,24)||"Ricky",C()),g()}}}function L(){document.addEventListener("click",It),g(),window.__day={state:()=>i,screen:()=>S}}var O=!1;if(at)w.default.initialize(),w.default.subscribe(()=>{if(O)return;O=!0;let t=w.default.extensionMeta;t&&t.version&&V(t),L()}),setTimeout(()=>{O||(O=!0,L())},1500);else{try{let t=localStorage.getItem(st);t&&V(JSON.parse(t))}catch{}L()}})();
+
+</script>
+</body>
+</html>
