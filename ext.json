@@ -4,6 +4,6 @@
   "description": "A friendly daily life tracker for kids: log your steps toward a goal, rate your day, note what you did great and one thing you'd do differently, and journal — with points, levels, streaks, badges, and a sunny mascot who cheers you on. Set your own goals to chase. Works fully offline; everything is saved in the note.",
   "content_type": "SN|Component",
   "area": "editor-editor",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "url": "https://justice2425.github.io/day-tracker/index.html"
 }
