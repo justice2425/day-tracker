@@ -3,16 +3,21 @@
 <head>
 <meta charset="utf-8" />
 <!--
-  Content Security Policy (same locked-down posture as the Chess/Math tutors):
+  Content Security Policy - locked down, offline-only.
   * default-src none  : nothing loads unless explicitly allowed.
   * script-src sha256 : ONLY this app's own inline code (pinned by hash) runs.
-  * connect-src none  : no network of any kind — nothing leaves the device.
+  * connect-src none  : no network of any kind - nothing leaves the device.
   * img/font/object/worker none : no external resources, no eval, no workers.
-  The whole app is offline, plain JavaScript; progress is saved in the note.
+
+  !! DO NOT EDIT THE HASH BY HAND AND DO NOT EDIT index.html DIRECTLY. !!
+  Edit src/app.js, then run:  python3 build.py
+  The build recomputes the hash. A stale hash silently blocks the whole app.
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-57KlAtFmeOevcmpvNeyE1vGEMsdF4N25THjZFOpZCRg='; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-kIciCy9kxA+l3Otj2WyuH37WrbHOo3lm0tEotJy0eXI='; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'" />
 <meta name="referrer" content="no-referrer" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<!-- Zoom deliberately left enabled (WCAG 2.1 SC 1.4.4). Inputs are >=16px so iOS
+     does not auto-zoom on focus, which is the usual reason people disable it. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>My Day</title>
 <style>
   :root{
@@ -20,226 +25,877 @@
     --fg: var(--sn-stylekit-foreground-color, #1f2937);
     --panel: var(--sn-stylekit-contrast-background-color, #ffffff);
     --border: var(--sn-stylekit-border-color, #f0d9b8);
-    --muted: var(--sn-stylekit-neutral-color, #7c6f64);
+    --muted: var(--sn-stylekit-neutral-color, #6b6156);
     --font: var(--sn-stylekit-editor-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif), "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla", sans-serif;
-    --accent:#f59e0b; --accent2:#fb923c; --sky:#38bdf8; --grape:#a78bfa;
-    --good:#16a34a; --good-bg:#dcfce7; --warn:#d97706; --gold:#f59e0b;
+    --accent:#f59e0b; --accent2:#fb923c; --sky:#0284c7; --grape:#7c3aed;
+    --good:#15803d; --good-bg:#dcfce7; --warn:#b45309; --gold:#f59e0b;
+    --danger:#b91c1c;
     --shadow:0 2px 0 rgba(0,0,0,.08);
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0;height:100%}
   body{background:var(--bg);color:var(--fg);font-family:var(--font);line-height:1.4;-webkit-text-size-adjust:100%}
-  #root{max-width:560px;margin:0 auto;padding:12px 14px 90px}
-  input,textarea,button{font-family:inherit}
+  #root{max-width:560px;margin:0 auto;padding:12px 14px 100px}
 
-  /* header: mascot greeting + stat chips */
+  /* Inputs at 16px+ so mobile Safari does not auto-zoom, letting us keep pinch-zoom on. */
+  input,textarea,button,select{font-family:inherit;font-size:16px}
+
+  /* Visible keyboard focus everywhere. */
+  :focus-visible{outline:3px solid var(--sky);outline-offset:2px;border-radius:6px}
+
+  @media (prefers-reduced-motion: reduce){
+    *{animation-duration:.001ms !important;transition-duration:.001ms !important}
+  }
+
+  /* ---- Boot failure notice -------------------------------------------------
+     Pure CSS. If the script is blocked (bad CSP hash) or throws before first
+     render, nothing can remove this node, so it fades in after 4s and tells
+     the user something concrete instead of leaving "Loading..." forever.
+     On a healthy boot the script deletes this node long before 4s. ---------- */
+  #bootfail{
+    max-width:560px;margin:0 auto;padding:16px;
+    border:2px solid var(--border);border-radius:16px;background:var(--panel);
+    opacity:0;animation:bootfail-in 0s linear 4s forwards;
+  }
+  @keyframes bootfail-in{to{opacity:1}}
+  #bootfail h2{margin:0 0 6px;font-size:1.05rem}
+  #bootfail p{margin:0 0 6px;font-size:.9rem;color:var(--muted)}
+  #bootfail code{font-size:.8rem;word-break:break-all}
+
+  /* ---- header -------------------------------------------------------------- */
   .hero{display:flex;align-items:center;gap:12px;background:linear-gradient(120deg,#fff7ed,#ffedd5);border:2px solid var(--border);border-radius:20px;padding:12px 14px;margin-bottom:12px}
   .mascot{font-size:2.6rem;line-height:1;filter:drop-shadow(0 2px 0 rgba(0,0,0,.06))}
   .hellowrap{flex:1;min-width:0}
   .hello{font-weight:800;font-size:1.15rem}
   .mascot-say{font-size:.85rem;color:var(--muted)}
+  .streakline{font-size:.8rem;color:var(--accent2);font-weight:700;margin-top:2px}
   .chips{display:flex;gap:8px;margin-bottom:14px}
   .chip{flex:1;background:var(--panel);border:2px solid var(--border);border-radius:16px;padding:9px 6px;text-align:center}
-  .chip .cn{font-size:1.2rem;font-weight:800}
+  .chip .cn{font-size:1.2rem;font-weight:800;display:flex;align-items:center;justify-content:center;gap:4px}
   .chip .cl{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
-  .chip.streak .cn{color:var(--accent2)}
+  .chip.days .cn{color:var(--accent2)}
   .chip.level .cn{color:var(--grape)}
   .chip.points .cn{color:var(--sky)}
 
-  /* level / xp bar */
   .levelbar{background:var(--panel);border:2px solid var(--border);border-radius:16px;padding:10px 12px;margin-bottom:14px}
-  .levelrow{display:flex;justify-content:space-between;font-weight:800;font-size:.9rem}
-  .levelrow .sub{color:var(--muted);font-weight:600}
+  .levelrow{display:flex;justify-content:space-between;font-weight:800;font-size:.9rem;gap:8px}
+  .levelrow .sub{color:var(--muted);font-weight:600;text-align:right}
   .xpbar{height:12px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:6px}
   .xpfill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:999px;transition:width .3s}
 
-  /* cards */
+  /* ---- cards --------------------------------------------------------------- */
   .card{background:var(--panel);border:2px solid var(--border);border-radius:20px;padding:16px;margin-bottom:14px;box-shadow:var(--shadow)}
   .card h2{margin:0 0 4px;font-size:1.05rem}
   .card .sub{color:var(--muted);font-size:.82rem;margin-bottom:10px}
   .section-title{font-weight:800;margin:2px 0 8px;font-size:1.1rem;display:flex;align-items:center;gap:8px}
-
-  /* step ring */
-  .ring-wrap{display:flex;align-items:center;gap:16px}
-  .ring{width:120px;height:120px;flex:0 0 auto}
-  .ring .bg{stroke:var(--border)}
-  .ring .fg{stroke:url(#rg);stroke-linecap:round;transition:stroke-dashoffset .4s}
-  .ring-mid{font-weight:800}
-  .ring-steps{flex:1}
-  .ring-steps label{font-size:.82rem;color:var(--muted);font-weight:700}
-  .stepinput{width:100%;font-size:1.6rem;font-weight:800;border:2px solid var(--border);border-radius:14px;padding:10px 12px;margin-top:4px;background:var(--bg);color:var(--fg);text-align:center}
-  .goaltag{font-size:.8rem;color:var(--muted);margin-top:6px}
-  .stepbtns{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
-  .stepbtn{border:2px solid var(--border);background:var(--panel);color:var(--fg);border-radius:999px;padding:6px 10px;font-weight:800;cursor:pointer;font-size:.82rem}
-  .stepbtn:active{transform:translateY(1px)}
-
-  /* inline SVG icons */
-  .ic{display:inline-block;vertical-align:-0.18em}
-
-  /* rating faces (SVG + word label) */
-  .faces{display:flex;justify-content:space-between;gap:6px}
-  .face{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:var(--bg);border:2px solid var(--border);border-radius:16px;padding:8px 2px 6px;cursor:pointer;transition:transform .1s}
-  .face:active{transform:translateY(1px)}
-  .face.on{border-color:var(--accent);background:#fffbeb}
-  .face .facelbl{font-size:.66rem;font-weight:800;color:var(--muted)}
-  .face.on .facelbl{color:var(--accent)}
-
-  /* date navigation */
-  .datenav{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-  .dnav{font-size:1.4rem;line-height:1;padding:6px 16px}
-  .dnav[disabled]{opacity:.35}
-  .dlabel{flex:1;text-align:center}
-  .dtitle{font-weight:800;font-size:1.15rem}
-  .dsmall{font-size:.78rem;color:var(--muted)}
-  .daterow{display:flex;gap:8px;align-items:center;margin-bottom:12px}
-  .dateinput{flex:1;border:2px solid var(--border);border-radius:12px;padding:9px 12px;background:var(--panel);color:var(--fg);font-size:.95rem;font-weight:700}
-
-  /* count-up goal rows */
-  .goal.count{cursor:default}
-  .gtarget{font-size:.78rem;color:var(--muted);font-weight:700}
-  .gcount{display:flex;align-items:center;gap:6px}
-  .gcinput{width:58px;text-align:center;border:2px solid var(--border);border-radius:10px;padding:6px 4px;background:var(--panel);color:var(--fg);font-weight:800;font-size:1rem}
-  .stepbtn.rnd{width:34px;padding:6px 0;text-align:center;font-size:1.1rem}
-  .gcheckbox{width:24px;height:24px;flex:0 0 auto;border:2px solid var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff}
-  .gcheckbox.on{background:var(--good);border-color:var(--good)}
-
-  /* goal editor extras */
-  .rowbtns .ghost.sel{border-color:var(--accent);background:#fffbeb;color:var(--accent)}
-  .countcfg{display:flex;align-items:center;gap:8px}
-  .countcfg label{font-weight:800}
-  .tnum{width:80px;border:2px solid var(--border);border-radius:10px;padding:8px;background:var(--bg);color:var(--fg);font-weight:800}
-  .tunit{flex:1;border:2px solid var(--border);border-radius:10px;padding:8px;background:var(--bg);color:var(--fg)}
-  .pshort{padding:12px;font-size:1rem;flex:1}
-
-  /* delete confirm */
-  .danger-ghost{width:100%;margin-top:8px;color:#b91c1c;border-color:#fecaca}
-  .danger{border:none;background:#dc2626;color:#fff;font-weight:800;border-radius:12px;padding:10px 14px;cursor:pointer}
-  .confirm{margin-top:10px;background:#fef2f2;border:2px solid #fecaca;border-radius:14px;padding:12px;text-align:center;font-weight:700;color:#991b1b}
-  .confirm button{margin-left:6px}
-
-  /* goals checklist */
-  .goals-list{display:flex;flex-direction:column;gap:8px}
-  .goal{display:flex;align-items:center;gap:10px;border:2px solid var(--border);background:var(--bg);border-radius:14px;padding:10px 12px;cursor:pointer}
-  .goal.done{border-color:var(--good);background:var(--good-bg)}
-  .goal .ge{font-size:1.4rem}
-  .goal .gn{flex:1;font-weight:700}
-  .goal .gcheck{font-size:1.3rem;color:var(--muted)}
-  .goal.done .gcheck{color:var(--good)}
-  .empty{color:var(--muted);text-align:center;padding:14px;font-size:.9rem}
-
-  /* text inputs */
-  .field label{font-weight:800;display:block;margin:2px 0 6px}
-  .field textarea, .field input[type=text]{width:100%;border:2px solid var(--border);border-radius:14px;padding:10px 12px;background:var(--bg);color:var(--fg);font-size:1rem;resize:vertical}
-  .field textarea{min-height:64px}
-  .field + .field{margin-top:12px}
-
-  /* buttons */
-  .primary{border:none;background:linear-gradient(120deg,var(--accent),var(--accent2));color:#fff;font-weight:800;border-radius:16px;padding:15px 22px;cursor:pointer;font-size:1.1rem;box-shadow:var(--shadow);width:100%}
-  .primary:active{transform:translateY(2px)}
-  .primary.saved{background:var(--good)}
-  .ghost{border:2px solid var(--border);background:var(--panel);color:var(--fg);font-weight:800;border-radius:14px;padding:11px 16px;cursor:pointer}
-  .ghost:active{transform:translateY(1px)}
-  .rowbtns{display:flex;gap:10px}
-  .rowbtns>*{flex:1}
-
-  /* bottom nav */
-  .nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--panel);border-top:2px solid var(--border);max-width:560px;margin:0 auto;z-index:10}
-  .navbtn{flex:1;border:none;background:none;color:var(--muted);padding:8px 0 10px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;font-weight:700}
-  .navbtn .ni{font-size:1.4rem}
-  .navbtn .nl{font-size:.68rem}
-  .navbtn.on{color:var(--accent2)}
-  .navbtn.on .ni{transform:translateY(-2px)}
-
-  /* toast (rewards) */
-  .toast{background:linear-gradient(90deg,#fef3c7,#fde68a);border:2px solid var(--gold);color:#7c2d12;border-radius:16px;padding:12px 14px;margin-bottom:12px;font-weight:800;text-align:center;animation:pop .25s ease}
-  @keyframes pop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
-
-  /* history */
-  .hlist{display:flex;flex-direction:column;gap:8px}
-  .hrow{display:flex;align-items:center;gap:12px;border:2px solid var(--border);background:var(--panel);border-radius:14px;padding:10px 12px;cursor:pointer}
-  .hrow .hface{font-size:1.5rem}
-  .hrow .hinfo{flex:1}
-  .hrow .hdate{font-weight:800}
-  .hrow .hsteps{font-size:.8rem;color:var(--muted)}
-  .hrow .hgo{color:var(--muted);font-weight:800}
-
-  /* badges */
-  .badges{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
-  .badge{display:flex;align-items:center;gap:8px;border:2px solid var(--border);border-radius:14px;padding:10px;color:var(--muted);opacity:.65;background:var(--panel)}
-  .badge.got{opacity:1;color:var(--fg);border-color:var(--gold)}
-  .badge .be{font-size:1.5rem}
-  .badge .bn{font-size:.82rem;font-weight:800}
-  .badge .bd{font-size:.7rem;color:var(--muted)}
-
-  /* rank ladder */
-  .ladder{display:flex;flex-direction:column;gap:6px}
-  .rl{display:flex;justify-content:space-between;align-items:center;border:2px solid var(--border);border-radius:12px;padding:9px 12px;font-weight:700;color:var(--muted)}
-  .rl.got{color:var(--fg);border-color:var(--grape);background:var(--panel)}
-  .rl.now{border-color:var(--accent);background:#fffbeb}
-
-  /* goal editor */
-  .goaledit{display:flex;flex-direction:column;gap:8px;border:2px dashed var(--border);border-radius:16px;padding:12px;margin-top:10px}
-  .emojipick{display:flex;gap:6px;flex-wrap:wrap}
-  .ep{font-size:1.3rem;border:2px solid var(--border);background:var(--panel);border-radius:12px;padding:4px 8px;cursor:pointer}
-  .ep.on{border-color:var(--accent);background:#fffbeb}
-  .del{border:none;background:none;color:#dc2626;font-weight:800;cursor:pointer;font-size:.85rem}
-  .goalmanage{display:flex;align-items:center;gap:10px;border:2px solid var(--border);border-radius:14px;padding:10px 12px;background:var(--panel)}
-  .goalmanage .gn{flex:1;font-weight:700}
-
-  .backbar{display:flex;align-items:center;gap:10px;margin-bottom:10px}
-  .backbar h1{font-size:1.2rem;margin:0}
+  .empty{color:var(--muted);font-size:.9rem;padding:8px 0}
   .small{font-size:.8rem;color:var(--muted)}
   .center{text-align:center}
+  .ic{vertical-align:-.15em}
+
+  /* ---- buttons ------------------------------------------------------------- */
+  button{cursor:pointer}
+  .primary{width:100%;min-height:52px;border:none;border-radius:16px;background:linear-gradient(120deg,var(--accent),var(--accent2));color:#fff;font-weight:800;font-size:1.05rem;box-shadow:var(--shadow);margin-bottom:10px}
+  .primary.pshort{width:auto;min-height:44px;padding:0 18px;font-size:.95rem;margin:0}
+  .ghost{min-height:44px;padding:0 14px;border:2px solid var(--border);border-radius:14px;background:var(--panel);color:var(--fg);font-weight:700}
+  .ghost.sel{border-color:var(--accent);background:#fff7ed}
+  .ghost.danger-ghost{color:var(--danger);border-color:#fecaca;width:100%}
+  .danger{min-height:44px;padding:0 14px;border:2px solid #fecaca;border-radius:14px;background:#fee2e2;color:var(--danger);font-weight:800}
+  .rowbtns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .del{min-height:40px;padding:0 12px;border:2px solid #fecaca;border-radius:12px;background:var(--panel);color:var(--danger);font-weight:700;font-size:.85rem}
+  .confirm{background:#fef2f2;border:2px solid #fecaca;border-radius:14px;padding:12px;font-weight:700;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+  /* ---- toast / save status -------------------------------------------------- */
+  .toast{background:var(--good-bg);border:2px solid #86efac;color:#14532d;border-radius:14px;padding:10px 12px;font-weight:800;margin-bottom:12px}
+  .savebar{position:fixed;left:0;right:0;bottom:76px;display:flex;justify-content:center;pointer-events:none;z-index:5}
+  .savebar span{background:var(--panel);border:2px solid var(--border);border-radius:999px;padding:5px 14px;font-size:.8rem;font-weight:700;box-shadow:var(--shadow)}
+  .savebar span.err{background:#fee2e2;border-color:#fecaca;color:var(--danger)}
+  .savebar span.ok{color:var(--good)}
+
+  /* ---- steps ring ----------------------------------------------------------- */
+  .ring-wrap{display:flex;gap:14px;align-items:center}
+  .ring{width:104px;height:104px;flex:none;color:var(--fg)}
+  .ring .bg{stroke:var(--border)}
+  .ring .fg{stroke:url(#rg);stroke-linecap:round}
+  .ring-steps{flex:1;min-width:0}
+  .ring-steps label{display:block;font-size:.8rem;color:var(--muted);margin-bottom:4px;font-weight:700}
+  .stepinput{width:100%;min-height:48px;padding:8px 10px;border:2px solid var(--border);border-radius:14px;background:var(--bg);color:var(--fg);font-size:1.4rem;font-weight:800}
+  .goaltag{font-size:.78rem;color:var(--muted);margin-top:4px}
+  .stepbtns{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .stepbtn{min-height:40px;padding:0 10px;border:2px solid var(--border);border-radius:12px;background:var(--bg);font-weight:700;font-size:.85rem}
+  .stepbtn.rnd{min-width:40px;padding:0;font-size:1.1rem}
+
+  /* ---- rating faces --------------------------------------------------------- */
+  .faces{display:flex;gap:6px}
+  .faces .face{flex:1;min-height:76px;border:2px solid var(--border);border-radius:16px;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:6px 2px}
+  .faces .face.on{border-color:var(--accent);background:#fff7ed;box-shadow:var(--shadow)}
+  .facelbl{font-size:.66rem;color:var(--muted);font-weight:700}
+
+  /* ---- goals ---------------------------------------------------------------- */
+  .goals-list{display:flex;flex-direction:column;gap:8px}
+  .goal{display:flex;align-items:center;gap:10px;border:2px solid var(--border);border-radius:14px;padding:10px 12px;background:var(--bg);min-height:52px;width:100%;text-align:left;font-size:1rem;color:var(--fg)}
+  .goal.done{border-color:#86efac;background:var(--good-bg)}
+  .goal .gn{flex:1;font-weight:700;min-width:0}
+  .gtarget{font-size:.78rem;color:var(--muted);font-weight:600}
+  .gcheckbox{width:26px;height:26px;flex:none;border:2px solid var(--border);border-radius:8px;background:var(--panel);display:flex;align-items:center;justify-content:center}
+  .gcheckbox.on{background:var(--good);border-color:var(--good);color:#fff}
+  .gcount{display:flex;align-items:center;gap:5px;flex:none}
+  .gcinput{width:56px;min-height:40px;text-align:center;border:2px solid var(--border);border-radius:10px;background:var(--panel);color:var(--fg);font-weight:800}
+  .goalmanage{display:flex;align-items:center;gap:10px;border:2px solid var(--border);border-radius:14px;padding:10px 12px;background:var(--bg);min-height:52px}
+  .goaledit{border:2px dashed var(--border);border-radius:16px;padding:12px;margin-top:10px}
+  .goaledit input[type=text]{width:100%;min-height:46px;padding:8px 10px;border:2px solid var(--border);border-radius:12px;background:var(--panel);color:var(--fg);margin:6px 0}
+  .emojipick{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+  .ep{width:44px;height:44px;border:2px solid var(--border);border-radius:12px;background:var(--panel);display:flex;align-items:center;justify-content:center}
+  .ep.on{border-color:var(--accent);background:#fff7ed}
+  .countcfg{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  .countcfg label{font-size:.85rem;font-weight:700}
+  .tnum{width:84px;min-height:44px;text-align:center;border:2px solid var(--border);border-radius:12px;background:var(--panel);color:var(--fg)}
+  .tunit{flex:1;min-width:100px;min-height:44px;padding:0 10px;border:2px solid var(--border);border-radius:12px;background:var(--panel);color:var(--fg)}
+
+  /* ---- fields --------------------------------------------------------------- */
+  .field label{display:flex;align-items:center;gap:6px;font-weight:700;font-size:.92rem;margin-bottom:6px}
+  .field textarea{width:100%;min-height:80px;padding:10px;border:2px solid var(--border);border-radius:14px;background:var(--bg);color:var(--fg);resize:vertical;line-height:1.45}
+
+  /* ---- date nav ------------------------------------------------------------- */
+  .datenav{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .dnav{min-width:48px;min-height:48px;font-size:1.4rem;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .dnav[disabled]{opacity:.35}
+  .dlabel{flex:1;text-align:center;min-width:0}
+  .dtitle{font-weight:800;font-size:1.1rem}
+  .dsmall{font-size:.76rem;color:var(--muted)}
+  .daterow{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .dateinput{flex:1;min-width:150px;min-height:44px;padding:0 10px;border:2px solid var(--border);border-radius:12px;background:var(--panel);color:var(--fg)}
+
+  /* ---- history -------------------------------------------------------------- */
+  .hlist{display:flex;flex-direction:column;gap:8px}
+  .hrow{display:flex;align-items:center;gap:10px;border:2px solid var(--border);border-radius:14px;padding:10px 12px;background:var(--bg);min-height:56px;width:100%;text-align:left;color:var(--fg)}
+  .hface{flex:none;width:28px}
+  .hinfo{flex:1;display:flex;flex-direction:column;min-width:0}
+  .hdate{font-weight:800;font-size:.92rem}
+  .hsteps{font-size:.78rem;color:var(--muted)}
+  .hgo{color:var(--muted);font-size:1.2rem}
+
+  /* ---- mood strip ----------------------------------------------------------- */
+  .strip{display:flex;gap:4px;margin-top:8px;flex-wrap:wrap}
+  .sq{width:22px;height:22px;border-radius:6px;border:2px solid var(--border);background:var(--bg)}
+  .sq.r1{background:#fecaca;border-color:#fca5a5}
+  .sq.r2{background:#fed7aa;border-color:#fdba74}
+  .sq.r3{background:#fef08a;border-color:#fde047}
+  .sq.r4{background:#bbf7d0;border-color:#86efac}
+  .sq.r5{background:#86efac;border-color:#4ade80}
+
+  /* ---- quest ---------------------------------------------------------------- */
+  .quest{display:flex;align-items:center;gap:12px;border:2px solid #ddd6fe;background:#f5f3ff;border-radius:16px;padding:12px;min-height:60px;width:100%;text-align:left;color:var(--fg)}
+  .quest.done{border-color:#86efac;background:var(--good-bg)}
+  .quest .qt{flex:1;font-weight:700;min-width:0}
+
+  /* ---- capsules ------------------------------------------------------------- */
+  .cap{border:2px solid var(--border);border-radius:16px;padding:12px;background:var(--bg);margin-bottom:8px}
+  .cap.locked{border-style:dashed;color:var(--muted)}
+  .cap .capwhen{font-size:.78rem;color:var(--muted);font-weight:700;margin-bottom:4px}
+  .cap .captext{white-space:pre-wrap;word-break:break-word}
+  .capnew input[type=date]{width:100%;min-height:46px;padding:0 10px;border:2px solid var(--border);border-radius:12px;background:var(--panel);color:var(--fg);margin:6px 0}
+
+  /* ---- export --------------------------------------------------------------- */
+  .exportbox{width:100%;min-height:120px;padding:10px;border:2px solid var(--border);border-radius:14px;background:var(--bg);color:var(--fg);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+
+  /* ---- bottom nav ----------------------------------------------------------- */
+  .nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--panel);border-top:2px solid var(--border);padding:4px 2px calc(4px + env(safe-area-inset-bottom));z-index:6}
+  .navbtn{flex:1;min-height:60px;border:none;background:none;color:var(--muted);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;border-radius:14px;padding:2px}
+  .navbtn.on{color:var(--accent2);background:#fff7ed;font-weight:800}
+  .nl{font-size:.66rem;font-weight:700}
+  .backbar h1{font-size:1.2rem;margin:0}
 </style>
 </head>
 <body>
   <div id="root">Loading…</div>
+  <div id="bootfail" role="alert">
+    <h2>My Day didn’t start</h2>
+    <p>The app’s code was blocked or failed to run, so nothing loaded.</p>
+    <p>Most likely cause: <code>index.html</code> was edited without rebuilding, so the
+       security hash in the page header no longer matches the code. Rebuild with
+       <code>python3 build.py</code> and upload again.</p>
+    <p>Open the browser console to confirm — a blocked script logs
+       “Refused to execute inline script”.</p>
+  </div>
   <script>
-(()=>{var mt=Object.create,at=Object.defineProperty,ht=Object.getOwnPropertyDescriptor,vt=Object.getOwnPropertyNames,gt=Object.getPrototypeOf,ft=Object.prototype.hasOwnProperty;var st=(t,e)=>()=>{try{return e||t((e={exports:{}}).exports,e),e.exports}catch(a){throw e=0,a}},yt=(t,e,a,n)=>{if(e&&typeof e=="object"||typeof e=="function")for(let r of vt(e))!ft.call(t,r)&&r!==a&&at(t,r,{get:()=>e[r],enumerable:!(n=ht(e,r))||n.enumerable});return t},nt=(t,e,a)=>(a=t!=null?mt(gt(t)):{},yt(e||!t||!t.__esModule?at(a,"default",{value:t,enumerable:!0}):a,t));var bt=st((t,e)=>{(function(a,n){if(typeof t=="object"&&typeof e=="object")e.exports=n();else if(typeof define=="function"&&define.amd)define([],n);else{var r=n();for(var l in r)(typeof t=="object"?t:a)[l]=r[l]}})(self,()=>(()=>{"use strict";var a,n,r={d:(s,i)=>{for(var d in i)r.o(i,d)&&!r.o(s,d)&&Object.defineProperty(s,d,{enumerable:!0,get:i[d]})},o:(s,i)=>Object.prototype.hasOwnProperty.call(s,i)},l={};r.d(l,{default:()=>y}),function(s){s.StreamContextItem="stream-context-item",s.SaveItems="save-items",s.ComponentRegistered="component-registered",s.ActivateThemes="themes",s.ThemesActivated="themes-activated",s.SetComponentData="set-component-data"}(a||(a={})),function(s){s.Component="component"}(n||(n={}));let y=new class{constructor(){this.component={activeThemes:[],acceptsThemes:!0},this.sentMessages=[],this.messageQueue=[],this.subscriptions=[],this.generateNotePreview=!0}initialize(s={}){if(this.contentWindow)throw"Cannot initialize mediator more than once";this.contentWindow=window,this.coallesedSavingDelay=s.debounceSave!==void 0?s.debounceSave:250,this.registerMessageHandler(),this.postMessage(a.StreamContextItem,{},i=>{let{item:d}=i;(!this.lastStreamedItem||this.lastStreamedItem.uuid!==d.uuid)&&this.pendingSaveTimeout&&(clearTimeout(this.pendingSaveTimeout),this.performSavingOfItems(this.pendingSaveParams),this.pendingSaveTimeout=void 0,this.pendingSaveParams=void 0),this.lastStreamedItem=d,this.lastStreamedItem.isMetadataUpdate||this.subscriptions.forEach(m=>{m(this.text,this.meta)})})}subscribe(s){return this.subscriptions.push(s),this.lastStreamedItem&&setTimeout(()=>{s(this.text,this.meta)}),()=>{let i=this.subscriptions.indexOf(s);i>=0&&this.subscriptions.splice(i,1)}}get text(){var s,i;return this.checkNoteExists(),((i=(s=this.lastStreamedItem)===null||s===void 0?void 0:s.content)===null||i===void 0?void 0:i.text)||""}get meta(){var s;return this.checkNoteExists(),!((s=this.lastStreamedItem)===null||s===void 0)&&s.content?this.lastStreamedItem.content.appData[this.lastStreamedItem.content.editorIdentifier]:{}}get extensionMeta(){return this.component.data}get locked(){var s,i;return this.checkNoteExists(),(i=(s=this.lastStreamedItem)===null||s===void 0?void 0:s.content)===null||i===void 0?void 0:i.appData["org.standardnotes.sn"].locked}get preview(){var s,i;return this.checkNoteExists(),(i=(s=this.lastStreamedItem)===null||s===void 0?void 0:s.content)===null||i===void 0?void 0:i.preview_plain}set text(s){this.checkNoteExists(),this.lastStreamedItem.content.text=s,this.saveNote(this.lastStreamedItem)}set preview(s){this.checkNoteExists(),this.generateNotePreview=!1,this.lastStreamedItem.content.preview_plain=s}set meta(s){this.checkNoteExists(),this.lastStreamedItem.content.appData[this.lastStreamedItem.content.editorIdentifier]=s,this.saveNote(this.lastStreamedItem)}set extensionMeta(s){this.component.data=s,this.postMessage(a.SetComponentData,{componentData:s})}registerMessageHandler(){this.messageHandler=s=>{let{data:i}=s,d=(m=>{if(typeof m!="string")return!1;try{let f=JSON.parse(m),b=Object.prototype.toString.call(f);return b==="[object Object]"||b==="[object Array]"}catch{return!1}})(i)?JSON.parse(i):i;d&&this.handleMessage(d)},this.contentWindow.document.addEventListener("message",this.messageHandler,!1),this.contentWindow.addEventListener("message",this.messageHandler,!1)}handleMessage(s){var i,d;switch(s.action){case a.ComponentRegistered:this.component.sessionKey=s.sessionKey,s.componentData&&(this.component.data=s.componentData),this.onReady(s.data);break;case a.ActivateThemes:this.activateThemes(s.data.themes);break;default:{if(!s.original)return;let m=(i=this.sentMessages)===null||i===void 0?void 0:i.filter(f=>{var b;return f.messageId===((b=s.original)===null||b===void 0?void 0:b.messageId)})[0];if(!m)return;(d=m==null?void 0:m.callback)===null||d===void 0||d.call(m,s.data);break}}}onReady(s){this.component.environment=s.environment,this.component.platform=s.platform,this.component.uuid=s.uuid;for(let i of this.messageQueue)this.postMessage(i.action,i.data,i.callback);this.messageQueue=[],this.activateThemes(s.activeThemeUrls||[]),this.postMessage(a.ThemesActivated,{})}get isRunningInDesktopApplication(){return this.component.environment==="desktop"}get isRunningInMobileApplication(){return this.component.environment==="mobile"}get isRunningInBrowser(){return this.component.environment==="web"}postMessage(s,i,d){if(!this.component.sessionKey)return void this.messageQueue.push({action:s,data:i,api:n.Component,callback:d});let m={action:s,data:i,messageId:this.generateUUID(),sessionKey:this.component.sessionKey,api:n.Component},f=JSON.parse(JSON.stringify(m)),b;f.callback=d,this.sentMessages.push(f),b=this.isRunningInMobileApplication?JSON.stringify(m):m,this.contentWindow.parent.postMessage(b,"*")}activateThemes(s=[]){if(!this.component.acceptsThemes)return;let{activeThemes:i}=this.component;if(i&&i.sort().toString()==s.sort().toString())return;let d=s,m=[];for(let f of i)s.includes(f)?d=d.filter(b=>b!==f):m.push(f);for(let f of m)this.deactivateTheme(f);this.component.activeThemes=s;for(let f of d){if(!f)continue;let b=f.endsWith("/org.standardnotes.theme-focus/index.css")?"https://app.standardnotes.com/components/assets/org.standardnotes.theme-focus/index.css":f,j=this.contentWindow.document.createElement("link");j.id=btoa(f),j.href=b,j.type="text/css",j.rel="stylesheet",j.media="screen,print",j.className="custom-theme",this.contentWindow.document.getElementsByTagName("head")[0].appendChild(j)}this.onThemesChangeCallback&&this.onThemesChangeCallback()}themeElementForUrl(s){return Array.from(this.contentWindow.document.getElementsByClassName("custom-theme")).slice().find(i=>i.id==btoa(s))}deactivateTheme(s){let i=this.themeElementForUrl(s);i&&i.parentNode&&(i.setAttribute("disabled","true"),i.parentNode.removeChild(i))}generateUUID(){return crypto.randomUUID()}get platform(){return this.component.platform}get environment(){return this.component.environment}performSavingOfItems({items:s,callback:i}){this.generateNotePreview&&(s[0].content.preview_plain=((m,f=50)=>m.length<=f?m:m.substring(0,f)+"...")(s[0].content.text));let d=[];for(let m of s)d.push(this.jsonObjectForItem(m));this.postMessage(a.SaveItems,{items:d},()=>{i==null||i()})}saveNote(s,i){let d=[s];if(this.pendingSaveItems||(this.pendingSaveItems=[]),this.coallesedSavingDelay){this.pendingSaveTimeout&&clearTimeout(this.pendingSaveTimeout);let m=d.map(b=>b.uuid),f=this.pendingSaveItems.filter(b=>!m.includes(b.uuid));this.pendingSaveItems=f.concat(d),this.pendingSaveParams={items:this.pendingSaveItems,callback:i},this.pendingSaveTimeout=setTimeout(()=>{this.performSavingOfItems(this.pendingSaveParams),this.pendingSaveItems=[],this.pendingSaveTimeout=void 0,this.pendingSaveParams=null},this.coallesedSavingDelay)}else this.performSavingOfItems({items:d,callback:i})}jsonObjectForItem(s){let i=Object.assign({},s);return i.children=null,i.parent=null,i}checkNoteExists(){if(!this.lastStreamedItem)throw"Trying to interact with note before it is received from Standard Notes. Use subscribe function."}};return l.default})())}),O=nt(bt());var $=(t=new Date)=>{let e=t.getFullYear(),a=String(t.getMonth()+1).padStart(2,"0"),n=String(t.getDate()).padStart(2,"0");return`${e}-${a}-${n}`},z=t=>typeof t=="string"&&/^\d{4}-\d{2}-\d{2}$/.test(t),St=(t,e)=>Math.round((Date.parse(e+"T00:00:00")-Date.parse(t+"T00:00:00"))/864e5),T=(t,e)=>{let[a,n,r]=t.split("-").map(Number),l=new Date(a,n-1,r);return l.setDate(l.getDate()+e),$(l)},R=t=>{let[e,a,n]=t.split("-").map(Number);return new Date(e,a-1,n).toLocaleDateString(void 0,{weekday:"short",month:"short",day:"numeric"})},U=t=>{let e=$();return t===e?"Today":t===T(e,-1)?"Yesterday":R(t)},u=t=>String(t==null?"":t).replace(/[&<>"']/g,e=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[e]),x=(t,e,a,n)=>{let r=Math.round(Number(t));return Number.isFinite(r)?Math.max(e,Math.min(a,r)):n},M=(t,e)=>(typeof t=="string"?t:"").slice(0,e),J=(t,e)=>Array.isArray(t)?t.slice(0,e):[];var V=["star","book","tooth","moon","drop","ball","music","art","heart","check"],G=[{at:0,icon:"star",name:"Sprout"},{at:50,icon:"star",name:"Star"},{at:150,icon:"fire",name:"Rocket"},{at:300,icon:"medal",name:"Hero"},{at:500,icon:"trophy",name:"Champion"},{at:800,icon:"crown",name:"Legend"},{at:1200,icon:"star",name:"Superstar"}],L=t=>{let e=G[0];for(let a of G)t>=a.at&&(e=a);return e},ot=t=>G.find(e=>e.at>t)||null;function kt(){return{version:2,name:"Ricky",points:0,streak:0,bestStreak:0,lastSavedDate:"",stepGoal:8e3,goals:[],days:{},badges:[],settings:{}}}function $t(t){if(!t||typeof t!="object")return null;let e=M(t.name,40).trim();if(!e)return null;let a=t.type==="count"?"count":"check",n=V.includes(t.icon)?t.icon:"star",r={id:M(t.id,24)||"g"+Math.random().toString(36).slice(2,9),name:e,icon:n,type:a};return a==="count"&&(r.target=x(t.target,1,1e5,10),r.unit=M(t.unit,16)),r}function wt(t,e){let a=t&&typeof t=="object"?t:{},n=new Set(e.filter(s=>s.type!=="count").map(s=>s.id)),r=new Set(e.filter(s=>s.type==="count").map(s=>s.id)),l=Object.create(null),y=a.goalCounts&&typeof a.goalCounts=="object"?a.goalCounts:{};for(let s of Object.keys(y))r.has(s)&&(l[s]=x(y[s],0,1e6,0));return{steps:x(a.steps,0,5e5,0),rating:x(a.rating,0,5,0),goalsDone:J(a.goalsDone,50).map(s=>M(s,24)).filter(s=>n.has(s)),goalCounts:l,wins:M(a.wins,1e3),differently:M(a.differently,1e3),journal:M(a.journal,4e3),savedPoints:x(a.savedPoints,0,1e5,0)}}function P(t){let e=kt(),a=t&&typeof t=="object"?t:{};e.name=M(a.name,24)||"Ricky",e.points=x(a.points,0,1e8,0),e.streak=x(a.streak,0,1e5,0),e.bestStreak=x(a.bestStreak,0,1e5,0),e.lastSavedDate=z(a.lastSavedDate)?a.lastSavedDate:"",e.stepGoal=x(a.stepGoal,100,1e5,8e3),e.goals=J(a.goals,20).map($t).filter(Boolean),e.days=Object.create(null);let n=a.days&&typeof a.days=="object"?a.days:{},r=Object.keys(n).filter(z).sort().slice(-500);for(let l of r)e.days[l]=wt(n[l],e.goals);return e.badges=J(a.badges,100).map(l=>M(l,32)),e.settings={},e}function F(t,e){let a=0;for(let n of e)if(n.type==="count"){let r=t.goalCounts&&t.goalCounts[n.id]||0;n.target>0&&r>=n.target&&a++}else t.goalsDone&&t.goalsDone.includes(n.id)&&a++;return a}function it(t,e,a){let n=10;return e>0&&t.steps>=e&&(n+=10),n+=3*F(t,a||[]),t.rating>0&&(n+=2),(t.wins||"").trim()&&(n+=3),(t.differently||"").trim()&&(n+=3),(t.journal||"").trim().length>=10&&(n+=4),n}function Y(t){let e=t.days,a=0,n=$();for(e[n]||(n=T(n,-1));e[n];)a++,n=T(n,-1);let r=Object.keys(e).sort(),l=0,y=0,s=null;for(let i of r)y=s&&St(s,i)===1?y+1:1,y>l&&(l=y),s=i;return{current:a,best:l}}var N=t=>Object.values(t.days),_=[{id:"first_day",icon:"star",name:"First Day",desc:"Save your first day.",has:t=>N(t).length>=1},{id:"streak_3",icon:"fire",name:"On Fire",desc:"3-day streak.",has:t=>t.bestStreak>=3},{id:"streak_7",icon:"calendar",name:"Whole Week",desc:"7-day streak.",has:t=>t.bestStreak>=7},{id:"streak_30",icon:"crown",name:"Super Streak",desc:"30-day streak!",has:t=>t.bestStreak>=30},{id:"stepper",icon:"shoe",name:"Goal Getter",desc:"Hit your step goal.",has:t=>N(t).some(e=>t.stepGoal>0&&e.steps>=t.stepGoal)},{id:"goal_setter",icon:"target",name:"Dreamer",desc:"Set a goal of your own.",has:t=>t.goals.length>=1},{id:"goal_10",icon:"check",name:"Checklist Champ",desc:"Complete 10 goals.",has:t=>N(t).reduce((e,a)=>e+F(a,t.goals),0)>=10},{id:"writer",icon:"book",name:"Storyteller",desc:"Journal on 5 days.",has:t=>N(t).filter(e=>(e.journal||"").trim().length>=10).length>=5},{id:"reflector",icon:"bulb",name:"Thinker",desc:"Reflect on 5 days.",has:t=>N(t).filter(e=>(e.differently||"").trim()).length>=5},{id:"amazing",icon:"trophy",name:"Best Day Ever",desc:"Rate a day 5 stars.",has:t=>N(t).some(e=>e.rating===5)}];function Q(t){let e=[];for(let a of _)a.has(t)&&!t.badges.includes(a.id)&&(t.badges.push(a.id),e.push(a));return e}function Z(t,e){if(e==="saved")return t.streak>=3?`${t.streak} days in a row \u2014 you're unstoppable!`:"Great job checking in today!";if(e==="rated1"||e==="rated2")return"Tomorrow is a brand-new day. You've got this!";if(e==="rated5")return"What an AMAZING day!";let a=new Date().getHours();return`${a<12?"Good morning":a<18?"Good afternoon":"Good evening"}! Ready to make today great?`}var Mt=(t,e,a=24)=>`<svg class="ic" viewBox="0 0 ${a} ${a}" width="${e}" height="${e}" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${t}</svg>`,k=(t,e=2)=>`<path d="${t}" stroke="currentColor" stroke-width="${e}" stroke-linecap="round" stroke-linejoin="round"/>`,B=t=>`<path d="${t}" fill="currentColor"/>`,rt={calendar:k("M7 3v3M17 3v3M4 8h16M6 5h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"),target:'<circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/>',book:k("M12 6c-1.6-1.2-3.6-2-6-2v13c2.4 0 4.4.8 6 2 1.6-1.2 3.6-2 6-2V4c-2.4 0-4.4.8-6 2zM12 6v13"),trophy:k("M8 4h8v4a4 4 0 0 1-8 0V4zM8 6H5v1a3 3 0 0 0 3 3M16 6h3v1a3 3 0 0 1-3 3M10 14h4M9 20h6M12 14v3"),star:B("M12 3l2.5 5.2 5.7.8-4.1 4 1 5.7L12 16l-5.1 2.7 1-5.7-4.1-4 5.7-.8L12 3z"),fire:'<path d="M12 3c1 3-2 4-2 7a2 2 0 1 0 4 0c0-1 1-1.5 1-1.5.5 1.5 1 2.3 1 4a5 5 0 1 1-10 0c0-4 4-5 6-9.5z" fill="currentColor"/>',medal:`<circle cx="12" cy="14" r="6" stroke="currentColor" stroke-width="2"/>${k("M9 3l3 5 3-5")}<path d="M12 11l1 2 2 .2-1.5 1.4.4 2-1.9-1-1.9 1 .4-2L9 13.2l2-.2 1-2z" fill="currentColor"/>`,shoe:k("M3 15h9l4 2h4a1 1 0 0 1 1 1v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-4zM6 15l-1-4 3-1 2 3"),check:k("M5 13l4 4 10-11",2.5),plus:k("M12 5v14M5 12h14",2.4),pencil:k("M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4"),trash:k("M5 7h14M9 7V5h6v2M6 7l1 13h10l1-13"),crown:'<path d="M4 8l3.5 3L12 5l4.5 6L20 8l-1.5 10h-13L4 8z" fill="currentColor"/>',bulb:`${k("M9 18h6M10 21h4")}<path d="M12 3a6 6 0 0 0-3.5 10.9c.5.4.5 1 .5 1.6h6c0-.6 0-1.2.5-1.6A6 6 0 0 0 12 3z" stroke="currentColor" stroke-width="2"/>`,heart:B("M12 20s-7-4.4-9-8.2C1.5 8.7 3 5.5 6 5.5c2 0 3 1.5 3.6 2.4C10 7 11.4 5.5 13.4 5.5c3 0 4.6 3.2 3 6.3C15.4 15.6 12 20 12 20z"),drop:B("M12 3c3 4 6 6.5 6 10a6 6 0 1 1-12 0c0-3.5 3-6 6-10z"),moon:B("M20 14a8 8 0 0 1-10.5-10 8 8 0 1 0 10.5 10z"),music:`${k("M9 18V6l10-2v12")}<circle cx="7" cy="18" r="2" fill="currentColor"/><circle cx="17" cy="16" r="2" fill="currentColor"/>`,art:'<circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="2"/><circle cx="8.5" cy="10" r="1.2" fill="currentColor"/><circle cx="12" cy="8" r="1.2" fill="currentColor"/><circle cx="15.5" cy="10" r="1.2" fill="currentColor"/><path d="M12 20a2.2 2.2 0 0 1-2-2c0-2 4-1.5 4-4" stroke="currentColor" stroke-width="2"/>',tooth:'<path d="M7 4c1.8 0 2.5 1 5 1s3.2-1 5-1 3 3 2 7c-.7 3-1 8-2.5 8s-1-4-2.5-4-1 4-2.5 4-1.8-5-2.5-8c-1-4 1-7 0-8z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>',ball:`<circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="2"/>${k("M3.5 12h17M12 3.5v17M6 6c3 2 3 10 0 12M18 6c-3 2-3 10 0 12",1.7)}`,home:k("M4 11l8-6 8 6M6 10v9h12v-9"),gift:`${k("M4 12h16M12 8v12M6 20h12V12H6v8zM6 12V9h12v3")}<path d="M12 8S10 3 8 4.5 10 8 12 8zM12 8s2-5 4-3.5S14 8 12 8z" stroke="currentColor" stroke-width="1.8"/>`,think:`<circle cx="12" cy="11" r="7.5" stroke="currentColor" stroke-width="2"/>${k("M12 12v.01M12 6.5a2.5 2.5 0 0 1 1 4.8c-.6.3-1 .8-1 1.7",2)}`};function h(t,e="1.2em"){return Mt(rt[t]||rt.star,e)}function ct(t="2.4rem"){let e=Array.from({length:8},(a,n)=>{let r=n*Math.PI/4,l=24+Math.cos(r)*20,y=24+Math.sin(r)*20,s=24+Math.cos(r)*15,i=24+Math.sin(r)*15;return`<line x1="${s.toFixed(1)}" y1="${i.toFixed(1)}" x2="${l.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>`}).join("");return`<svg viewBox="0 0 48 48" width="${t}" height="${t}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${e}<circle cx="24" cy="24" r="11" fill="#fbbf24"/><circle cx="20" cy="23" r="1.6" fill="#7c4a03"/><circle cx="28" cy="23" r="1.6" fill="#7c4a03"/><path d="M19 27c1.5 2.5 8.5 2.5 10 0" stroke="#7c4a03" stroke-width="2" stroke-linecap="round" fill="none"/></svg>`}var q=["Rough","Meh","Okay","Good","Great"];function X(t,e="1.9rem"){return`<svg viewBox="0 0 48 48" width="${e}" height="${e}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="24" cy="24" r="20" fill="#fde68a" stroke="#f59e0b" stroke-width="2"/>${t===5?'<path d="M17 22l1.5 1.5L20 22M28 22l1.5 1.5L31 22" stroke="#7c4a03" stroke-width="2" stroke-linecap="round" fill="none"/>':'<circle cx="18.5" cy="22" r="1.8" fill="#7c4a03"/><circle cx="29.5" cy="22" r="1.8" fill="#7c4a03"/>'}${{1:'<path d="M16 33c2-4 14-4 16 0" stroke="#7c4a03" stroke-width="2.4" stroke-linecap="round" fill="none"/>',2:'<path d="M16 32c2-2 14-2 16 0" stroke="#7c4a03" stroke-width="2.4" stroke-linecap="round" fill="none"/>',3:'<path d="M17 31h14" stroke="#7c4a03" stroke-width="2.4" stroke-linecap="round"/>',4:'<path d="M16 29c2 4 14 4 16 0" stroke="#7c4a03" stroke-width="2.4" stroke-linecap="round" fill="none"/>',5:'<path d="M15 28c3 7 15 7 18 0z" fill="#7c4a03"/>'}[t]}</svg>`}var o=P({}),I="today",g=$(),c=null,v=null,E="",w=!1,D=(t,e,a)=>Math.max(e,Math.min(a,Number.isFinite(t)?t:e)),Ct=()=>document.getElementById("root"),S=t=>document.getElementById(t),ut=(()=>{try{return window.parent&&window.parent!==window}catch{return!1}})(),pt="day-tracker-state-v1",lt=null;function Dt(){let t=L(o.points),e=o.days[$()],a=[`My Day \u2014 ${o.name}`,`${t.name} \xB7 ${o.points} points \xB7 ${o.streak}-day streak`,`Days logged: ${Object.keys(o.days).length} \xB7 Badges: ${o.badges.length}/${_.length}`];return e&&a.push(`Today: ${e.steps} steps${e.rating?" \xB7 "+q[e.rating-1]:""}`),a.join(`
-`)}var It=()=>`${o.name} \xB7 ${L(o.points).name} \xB7 ${o.points} pts \xB7 ${o.streak}-day streak`;function A(){if(ut)try{O.default.extensionMeta=o,O.default.text=Dt(),O.default.preview=It()}catch{}else clearTimeout(lt),lt=setTimeout(()=>{try{localStorage.setItem(pt,JSON.stringify(o))}catch{}},150)}function dt(t){try{o=P(t)}catch{o=P({})}}function W(){if(!c||c.date!==g){let t=o.days[g];c={date:g,steps:t?t.steps:0,rating:t?t.rating:0,goalsDone:new Set(t?t.goalsDone:[]),goalCounts:Object.assign(Object.create(null),t?t.goalCounts:null),wins:t?t.wins:"",differently:t?t.differently:"",journal:t?t.journal:""}}}function C(){W(),S("steps")&&(c.steps=D(parseInt((S("steps").value||"0").replace(/[^0-9]/g,""),10)||0,0,5e5)),S("wins")&&(c.wins=S("wins").value.slice(0,1e3)),S("differently")&&(c.differently=S("differently").value.slice(0,1e3)),S("journal")&&(c.journal=S("journal").value.slice(0,4e3));for(let t of o.goals)if(t.type==="count"){let e=S("gc_"+t.id);e&&(c.goalCounts[t.id]=D(parseInt((e.value||"0").replace(/[^0-9]/g,""),10)||0,0,1e6))}}function tt(){v&&(S("goalname")&&(v.name=S("goalname").value.slice(0,40)),S("goaltarget")&&(v.target=D(parseInt(S("goaltarget").value||"10",10)||10,1,1e5)),S("goalunit")&&(v.unit=S("goalunit").value.slice(0,16)))}function jt(){C();let t=g,e={steps:c.steps,rating:c.rating,goalsDone:[...c.goalsDone],goalCounts:Object.assign({},c.goalCounts),wins:c.wins,differently:c.differently,journal:c.journal,savedPoints:0},a=o.days[t]?o.days[t].savedPoints:0,n=it(e,o.stepGoal,o.goals);e.savedPoints=n,o.days[t]=e,o.points=Math.max(0,o.points+(n-a));let r=Y(o);o.streak=r.current,r.best>o.bestStreak&&(o.bestStreak=r.best),o.lastSavedDate=Object.keys(o.days).sort().slice(-1)[0]||"";let l=Q(o),y=n-a;if(l.length)E="New badge: "+l.map(s=>s.name).join(", ")+"!";else{let s=e.rating===5?"rated5":e.rating&&e.rating<=2?"rated1":"saved";E=Z(o,s)+(y>0?`  +${y} pts`:"")}A(),p()}function Ot(){let t=o.days[g];if(t){o.points=Math.max(0,o.points-(t.savedPoints||0)),delete o.days[g];let e=Y(o);o.streak=e.current,c=null,E="Day deleted."}w=!1,A(),p()}function Nt(t,e){let n=2*Math.PI*52,pr=e>0?t/e:0,r=Math.min(pr,1),l=n*(1-r),y=Math.round(pr*100);return`<svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+(()=>{
+var mt=Object.create,at=Object.defineProperty,ht=Object.getOwnPropertyDescriptor,vt=Object.getOwnPropertyNames,gt=Object.getPrototypeOf,ft=Object.prototype.hasOwnProperty;var st=(t,e)=>()=>{try{return e||t((e={exports:{}}).exports,e),e.exports}catch(a){throw e=0,a}},yt=(t,e,a,n)=>{if(e&&typeof e=="object"||typeof e=="function")for(let r of vt(e))!ft.call(t,r)&&r!==a&&at(t,r,{get:()=>e[r],enumerable:!(n=ht(e,r))||n.enumerable});return t},nt=(t,e,a)=>(a=t!=null?mt(gt(t)):{},yt(e||!t||!t.__esModule?at(a,"default",{value:t,enumerable:!0}):a,t));var bt=st((t,e)=>{(function(a,n){if(typeof t=="object"&&typeof e=="object")e.exports=n();else if(typeof define=="function"&&define.amd)define([],n);else{var r=n();for(var l in r)(typeof t=="object"?t:a)[l]=r[l]}})(self,()=>(()=>{"use strict";var a,n,r={d:(s,i)=>{for(var d in i)r.o(i,d)&&!r.o(s,d)&&Object.defineProperty(s,d,{enumerable:!0,get:i[d]})},o:(s,i)=>Object.prototype.hasOwnProperty.call(s,i)},l={};r.d(l,{default:()=>y}),function(s){s.StreamContextItem="stream-context-item",s.SaveItems="save-items",s.ComponentRegistered="component-registered",s.ActivateThemes="themes",s.ThemesActivated="themes-activated",s.SetComponentData="set-component-data"}(a||(a={})),function(s){s.Component="component"}(n||(n={}));let y=new class{constructor(){this.component={activeThemes:[],acceptsThemes:!0},this.sentMessages=[],this.messageQueue=[],this.subscriptions=[],this.generateNotePreview=!0}initialize(s={}){if(this.contentWindow)throw"Cannot initialize mediator more than once";this.contentWindow=window,this.coallesedSavingDelay=s.debounceSave!==void 0?s.debounceSave:250,this.registerMessageHandler(),this.postMessage(a.StreamContextItem,{},i=>{let{item:d}=i;(!this.lastStreamedItem||this.lastStreamedItem.uuid!==d.uuid)&&this.pendingSaveTimeout&&(clearTimeout(this.pendingSaveTimeout),this.performSavingOfItems(this.pendingSaveParams),this.pendingSaveTimeout=void 0,this.pendingSaveParams=void 0),this.lastStreamedItem=d,this.lastStreamedItem.isMetadataUpdate||this.subscriptions.forEach(m=>{m(this.text,this.meta)})})}subscribe(s){return this.subscriptions.push(s),this.lastStreamedItem&&setTimeout(()=>{s(this.text,this.meta)}),()=>{let i=this.subscriptions.indexOf(s);i>=0&&this.subscriptions.splice(i,1)}}get text(){var s,i;return this.checkNoteExists(),((i=(s=this.lastStreamedItem)===null||s===void 0?void 0:s.content)===null||i===void 0?void 0:i.text)||""}get meta(){var s;return this.checkNoteExists(),!((s=this.lastStreamedItem)===null||s===void 0)&&s.content?this.lastStreamedItem.content.appData[this.lastStreamedItem.content.editorIdentifier]:{}}get extensionMeta(){return this.component.data}get locked(){var s,i;return this.checkNoteExists(),(i=(s=this.lastStreamedItem)===null||s===void 0?void 0:s.content)===null||i===void 0?void 0:i.appData["org.standardnotes.sn"].locked}get preview(){var s,i;return this.checkNoteExists(),(i=(s=this.lastStreamedItem)===null||s===void 0?void 0:s.content)===null||i===void 0?void 0:i.preview_plain}set text(s){this.checkNoteExists(),this.lastStreamedItem.content.text=s,this.saveNote(this.lastStreamedItem)}set preview(s){this.checkNoteExists(),this.generateNotePreview=!1,this.lastStreamedItem.content.preview_plain=s}set meta(s){this.checkNoteExists(),this.lastStreamedItem.content.appData[this.lastStreamedItem.content.editorIdentifier]=s,this.saveNote(this.lastStreamedItem)}set extensionMeta(s){this.component.data=s,this.postMessage(a.SetComponentData,{componentData:s})}registerMessageHandler(){this.messageHandler=s=>{let{data:i}=s,d=(m=>{if(typeof m!="string")return!1;try{let f=JSON.parse(m),b=Object.prototype.toString.call(f);return b==="[object Object]"||b==="[object Array]"}catch{return!1}})(i)?JSON.parse(i):i;d&&this.handleMessage(d)},this.contentWindow.document.addEventListener("message",this.messageHandler,!1),this.contentWindow.addEventListener("message",this.messageHandler,!1)}handleMessage(s){var i,d;switch(s.action){case a.ComponentRegistered:this.component.sessionKey=s.sessionKey,s.componentData&&(this.component.data=s.componentData),this.onReady(s.data);break;case a.ActivateThemes:this.activateThemes(s.data.themes);break;default:{if(!s.original)return;let m=(i=this.sentMessages)===null||i===void 0?void 0:i.filter(f=>{var b;return f.messageId===((b=s.original)===null||b===void 0?void 0:b.messageId)})[0];if(!m)return;(d=m==null?void 0:m.callback)===null||d===void 0||d.call(m,s.data);break}}}onReady(s){this.component.environment=s.environment,this.component.platform=s.platform,this.component.uuid=s.uuid;for(let i of this.messageQueue)this.postMessage(i.action,i.data,i.callback);this.messageQueue=[],this.activateThemes(s.activeThemeUrls||[]),this.postMessage(a.ThemesActivated,{})}get isRunningInDesktopApplication(){return this.component.environment==="desktop"}get isRunningInMobileApplication(){return this.component.environment==="mobile"}get isRunningInBrowser(){return this.component.environment==="web"}postMessage(s,i,d){if(!this.component.sessionKey)return void this.messageQueue.push({action:s,data:i,api:n.Component,callback:d});let m={action:s,data:i,messageId:this.generateUUID(),sessionKey:this.component.sessionKey,api:n.Component},f=JSON.parse(JSON.stringify(m)),b;f.callback=d,this.sentMessages.push(f),b=this.isRunningInMobileApplication?JSON.stringify(m):m,this.contentWindow.parent.postMessage(b,"*")}activateThemes(s=[]){if(!this.component.acceptsThemes)return;let{activeThemes:i}=this.component;if(i&&i.sort().toString()==s.sort().toString())return;let d=s,m=[];for(let f of i)s.includes(f)?d=d.filter(b=>b!==f):m.push(f);for(let f of m)this.deactivateTheme(f);this.component.activeThemes=s;for(let f of d){if(!f)continue;let b=f.endsWith("/org.standardnotes.theme-focus/index.css")?"https://app.standardnotes.com/components/assets/org.standardnotes.theme-focus/index.css":f,j=this.contentWindow.document.createElement("link");j.id=btoa(f),j.href=b,j.type="text/css",j.rel="stylesheet",j.media="screen,print",j.className="custom-theme",this.contentWindow.document.getElementsByTagName("head")[0].appendChild(j)}this.onThemesChangeCallback&&this.onThemesChangeCallback()}themeElementForUrl(s){return Array.from(this.contentWindow.document.getElementsByClassName("custom-theme")).slice().find(i=>i.id==btoa(s))}deactivateTheme(s){let i=this.themeElementForUrl(s);i&&i.parentNode&&(i.setAttribute("disabled","true"),i.parentNode.removeChild(i))}generateUUID(){return crypto.randomUUID()}get platform(){return this.component.platform}get environment(){return this.component.environment}performSavingOfItems({items:s,callback:i}){this.generateNotePreview&&(s[0].content.preview_plain=((m,f=50)=>m.length<=f?m:m.substring(0,f)+"...")(s[0].content.text));let d=[];for(let m of s)d.push(this.jsonObjectForItem(m));this.postMessage(a.SaveItems,{items:d},()=>{i==null||i()})}saveNote(s,i){let d=[s];if(this.pendingSaveItems||(this.pendingSaveItems=[]),this.coallesedSavingDelay){this.pendingSaveTimeout&&clearTimeout(this.pendingSaveTimeout);let m=d.map(b=>b.uuid),f=this.pendingSaveItems.filter(b=>!m.includes(b.uuid));this.pendingSaveItems=f.concat(d),this.pendingSaveParams={items:this.pendingSaveItems,callback:i},this.pendingSaveTimeout=setTimeout(()=>{this.performSavingOfItems(this.pendingSaveParams),this.pendingSaveItems=[],this.pendingSaveTimeout=void 0,this.pendingSaveParams=null},this.coallesedSavingDelay)}else this.performSavingOfItems({items:d,callback:i})}jsonObjectForItem(s){let i=Object.assign({},s);return i.children=null,i.parent=null,i}checkNoteExists(){if(!this.lastStreamedItem)throw"Trying to interact with note before it is received from Standard Notes. Use subscribe function."}};return l.default})())}),O=nt(bt());
+/* ===========================================================================
+   My Day - a private, offline daily tracker for one kid.
+
+   ARCHITECTURE NOTES (read before editing)
+   ---------------------------------------
+   * Storage: inside Standard Notes, state lives in the component's own data
+     (`extensionMeta`). The note's *text* only ever receives a short summary,
+     never journal content. Standalone (outside SN), state goes to localStorage.
+   * Rendering: full innerHTML re-render on every change. Cheap at this size.
+     `restoreFocus` puts keyboard focus back afterwards so a11y survives.
+   * Never edit index.html directly. Edit this file, run `python3 build.py`.
+   =========================================================================== */
+
+/* --- small helpers -------------------------------------------------------- */
+
+const todayStr = (d = new Date()) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+const isDateStr = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+const dayDiff = (a, b) =>
+  Math.round((Date.parse(b + "T00:00:00") - Date.parse(a + "T00:00:00")) / 86400000);
+const addDays = (s, n) => {
+  const [y, m, d] = s.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + n);
+  return todayStr(dt);
+};
+const prettyDate = (s) => {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    weekday: "short", month: "short", day: "numeric",
+  });
+};
+const relDate = (s) => {
+  const t = todayStr();
+  if (s === t) return "Today";
+  if (s === addDays(t, -1)) return "Yesterday";
+  return prettyDate(s);
+};
+
+const esc = (v) =>
+  String(v == null ? "" : v).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const clampInt = (v, lo, hi, dflt) => {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt;
+};
+const clampStr = (v, max) => (typeof v === "string" ? v : "").slice(0, max);
+const clampArr = (v, max) => (Array.isArray(v) ? v.slice(0, max) : []);
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number.isFinite(v) ? v : lo));
+
+const newId = (p) => p + Math.random().toString(36).slice(2, 9);
+
+/* --- levels & badges ------------------------------------------------------ */
+
+const GOAL_ICONS = ["star","book","tooth","moon","drop","ball","music","art","heart","check"];
+
+const LEVELS = [
+  { at: 0,    icon: "star",   name: "Sprout" },
+  { at: 50,   icon: "star",   name: "Star" },
+  { at: 150,  icon: "fire",   name: "Rocket" },
+  { at: 300,  icon: "medal",  name: "Hero" },
+  { at: 500,  icon: "trophy", name: "Champion" },
+  { at: 800,  icon: "crown",  name: "Legend" },
+  { at: 1200, icon: "star",   name: "Superstar" },
+];
+const levelFor = (pts) => LEVELS.reduce((best, l) => (pts >= l.at ? l : best), LEVELS[0]);
+const nextLevel = (pts) => LEVELS.find((l) => l.at > pts) || null;
+
+const allDays = (s) => Object.values(s.days);
+
+const BADGES = [
+  { id:"first_day",  icon:"star",     name:"First Day",       desc:"Save your first day.",     has:(s)=>allDays(s).length>=1 },
+  { id:"streak_3",   icon:"fire",     name:"On Fire",         desc:"3 days in a row.",         has:(s)=>s.bestStreak>=3 },
+  { id:"streak_7",   icon:"calendar", name:"Whole Week",      desc:"7 days in a row.",         has:(s)=>s.bestStreak>=7 },
+  { id:"days_30",    icon:"crown",    name:"Thirty Days",     desc:"Log 30 days in total.",    has:(s)=>allDays(s).length>=30 },
+  { id:"stepper",    icon:"shoe",     name:"Goal Getter",     desc:"Hit your step goal.",      has:(s)=>allDays(s).some(d=>s.stepGoal>0&&d.steps>=s.stepGoal) },
+  { id:"goal_setter",icon:"target",   name:"Dreamer",         desc:"Set a goal of your own.",  has:(s)=>s.goals.length>=1 },
+  { id:"goal_10",    icon:"check",    name:"Checklist Champ", desc:"Complete 10 goals.",       has:(s)=>allDays(s).reduce((n,d)=>n+goalsCompleted(d,s.goals),0)>=10 },
+  { id:"writer",     icon:"book",     name:"Storyteller",     desc:"Journal on 5 days.",       has:(s)=>allDays(s).filter(d=>(d.journal||"").trim().length>=10).length>=5 },
+  { id:"reflector",  icon:"bulb",     name:"Thinker",         desc:"Reflect on 5 days.",       has:(s)=>allDays(s).filter(d=>(d.differently||"").trim()).length>=5 },
+  { id:"amazing",    icon:"trophy",   name:"Best Day Ever",   desc:"Rate a day 5 stars.",      has:(s)=>allDays(s).some(d=>d.rating===5) },
+  { id:"capsule",    icon:"gift",     name:"Time Traveller",  desc:"Write a letter to future you.", has:(s)=>s.capsules.length>=1 },
+  { id:"quests_10",  icon:"think",    name:"Quest Hero",      desc:"Finish 10 mini-quests.",   has:(s)=>allDays(s).filter(d=>d.quest).length>=10 },
+];
+
+/* --- mini-quests ----------------------------------------------------------
+   Chosen from the date so it is stable all day and identical offline.
+   Deliberately tiny, kind, and always optional - skipping costs nothing.     */
+
+const QUESTS = [
+  "Say something nice to someone in your family.",
+  "Drink a big glass of water.",
+  "Tidy one small thing in your room.",
+  "Draw a picture of your favourite animal.",
+  "Read a page out loud to someone.",
+  "Do 10 star jumps.",
+  "Find 3 things out of a window that are green.",
+  "Tell someone a joke.",
+  "Stretch up tall like a tree for 10 seconds.",
+  "Think of one thing you're glad about.",
+  "Help clear the table.",
+  "Learn a new word and use it today.",
+  "Make up a silly song about your day.",
+  "Find something that starts with the same letter as your name.",
+  "Give someone a high five.",
+  "Look at the sky and find a shape in the clouds.",
+];
+const questFor = (dateStr) => {
+  let h = 0;
+  for (let i = 0; i < dateStr.length; i++) h = (h * 31 + dateStr.charCodeAt(i)) >>> 0;
+  return QUESTS[h % QUESTS.length];
+};
+
+/* --- state ---------------------------------------------------------------- */
+
+const STATE_VERSION = 3;
+
+function blankState() {
+  return {
+    version: STATE_VERSION,
+    name: "Ricky",
+    points: 0,
+    streak: 0,
+    bestStreak: 0,
+    lastSavedDate: "",
+    stepGoal: 8000,
+    goals: [],
+    days: {},
+    badges: [],
+    capsules: [],
+    settings: { notePrivacy: "summary" },
+  };
+}
+
+function sanitizeGoal(g) {
+  if (!g || typeof g !== "object") return null;
+  const name = clampStr(g.name, 40).trim();
+  if (!name) return null;
+  const type = g.type === "count" ? "count" : "check";
+  const out = {
+    id: clampStr(g.id, 24) || newId("g"),
+    name,
+    icon: GOAL_ICONS.includes(g.icon) ? g.icon : "star",
+    type,
+  };
+  if (type === "count") {
+    out.target = clampInt(g.target, 1, 100000, 10);
+    out.unit = clampStr(g.unit, 16);
+  }
+  return out;
+}
+
+function sanitizeDay(d, goals) {
+  const src = d && typeof d === "object" ? d : {};
+  const checkIds = new Set(goals.filter((g) => g.type !== "count").map((g) => g.id));
+  const countIds = new Set(goals.filter((g) => g.type === "count").map((g) => g.id));
+  const counts = Object.create(null);
+  const rawCounts = src.goalCounts && typeof src.goalCounts === "object" ? src.goalCounts : {};
+  for (const k of Object.keys(rawCounts)) {
+    if (countIds.has(k)) counts[k] = clampInt(rawCounts[k], 0, 1000000, 0);
+  }
+  return {
+    steps: clampInt(src.steps, 0, 500000, 0),
+    rating: clampInt(src.rating, 0, 5, 0),
+    goalsDone: clampArr(src.goalsDone, 50).map((x) => clampStr(x, 24)).filter((x) => checkIds.has(x)),
+    goalCounts: counts,
+    wins: clampStr(src.wins, 1000),
+    differently: clampStr(src.differently, 1000),
+    journal: clampStr(src.journal, 4000),
+    quest: !!src.quest,
+    savedPoints: clampInt(src.savedPoints, 0, 100000, 0),
+  };
+}
+
+function sanitizeCapsule(c) {
+  if (!c || typeof c !== "object") return null;
+  const text = clampStr(c.text, 1000).trim();
+  if (!text || !isDateStr(c.openOn)) return null;
+  return {
+    id: clampStr(c.id, 24) || newId("c"),
+    openOn: c.openOn,
+    createdOn: isDateStr(c.createdOn) ? c.createdOn : todayStr(),
+    text,
+  };
+}
+
+function sanitizeState(raw) {
+  const s = blankState();
+  const src = raw && typeof raw === "object" ? raw : {};
+  s.name = clampStr(src.name, 24) || "Ricky";
+  s.points = clampInt(src.points, 0, 100000000, 0);
+  s.bestStreak = clampInt(src.bestStreak, 0, 100000, 0);
+  s.lastSavedDate = isDateStr(src.lastSavedDate) ? src.lastSavedDate : "";
+  s.stepGoal = clampInt(src.stepGoal, 100, 100000, 8000);
+  s.goals = clampArr(src.goals, 20).map(sanitizeGoal).filter(Boolean);
+  s.days = Object.create(null);
+  const rawDays = src.days && typeof src.days === "object" ? src.days : {};
+  for (const k of Object.keys(rawDays).filter(isDateStr).sort().slice(-500)) {
+    s.days[k] = sanitizeDay(rawDays[k], s.goals);
+  }
+  s.badges = clampArr(src.badges, 100).map((b) => clampStr(b, 32));
+  s.capsules = clampArr(src.capsules, 20).map(sanitizeCapsule).filter(Boolean);
+  const priv = src.settings && src.settings.notePrivacy === "minimal" ? "minimal" : "summary";
+  s.settings = { notePrivacy: priv };
+  const st = computeStreak(s);
+  s.streak = st.current;
+  if (st.best > s.bestStreak) s.bestStreak = st.best;
+  return s;
+}
+
+function goalsCompleted(day, goals) {
+  let n = 0;
+  for (const g of goals) {
+    if (g.type === "count") {
+      const v = (day.goalCounts && day.goalCounts[g.id]) || 0;
+      if (g.target > 0 && v >= g.target) n++;
+    } else if (day.goalsDone && day.goalsDone.includes(g.id)) n++;
+  }
+  return n;
+}
+
+function pointsForDay(day, stepGoal, goals) {
+  let p = 10;
+  if (stepGoal > 0 && day.steps >= stepGoal) p += 10;
+  p += 3 * goalsCompleted(day, goals || []);
+  if (day.rating > 0) p += 2;
+  if ((day.wins || "").trim()) p += 3;
+  if ((day.differently || "").trim()) p += 3;
+  if ((day.journal || "").trim().length >= 10) p += 4;
+  if (day.quest) p += 2;
+  return p;
+}
+
+/* Streak with ONE forgiven gap. Missing a single day no longer resets to zero;
+   a second consecutive miss ends the run. This keeps the streak encouraging
+   without turning one busy day into a punishment. */
+const STREAK_GRACE = 1;
+
+function computeStreak(s) {
+  const days = s.days;
+  let cursor = todayStr();
+  if (!days[cursor]) cursor = addDays(cursor, -1); // today not logged yet is fine
+  let current = 0;
+  let grace = STREAK_GRACE;
+  while (true) {
+    if (days[cursor]) {
+      current++;
+    } else if (grace > 0) {
+      grace--;
+    } else {
+      break;
+    }
+    cursor = addDays(cursor, -1);
+    if (current > 5000) break; // hard safety stop
+  }
+  // best run ever, same grace rule
+  const keys = Object.keys(days).sort();
+  let best = 0, run = 0, prev = null;
+  for (const k of keys) {
+    const gap = prev ? dayDiff(prev, k) : 1;
+    run = gap <= 1 + STREAK_GRACE ? run + 1 : 1;
+    if (run > best) best = run;
+    prev = k;
+  }
+  return { current, best };
+}
+
+function awardBadges(s) {
+  const won = [];
+  for (const b of BADGES) {
+    if (b.has(s) && !s.badges.includes(b.id)) {
+      s.badges.push(b.id);
+      won.push(b);
+    }
+  }
+  return won;
+}
+
+function mascotSays(s, mood) {
+  if (mood === "saved") {
+    return s.streak >= 3 ? `${s.streak} days in a row — you're unstoppable!` : "Great job checking in today!";
+  }
+  if (mood === "rated1" || mood === "rated2") return "Tomorrow is a brand-new day. You've got this!";
+  if (mood === "rated5") return "What an AMAZING day!";
+  const h = new Date().getHours();
+  const part = h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+  return `${part}! Ready to make today great?`;
+}
+
+/* --- icons ---------------------------------------------------------------- */
+
+const svg = (inner, size, box = 24) =>
+  `<svg class="ic" viewBox="0 0 ${box} ${box}" width="${size}" height="${size}" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${inner}</svg>`;
+const stroke = (d, w = 2) =>
+  `<path d="${d}" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+const fill = (d) => `<path d="${d}" fill="currentColor"/>`;
+
+const ICONS = {
+  calendar: stroke("M7 3v3M17 3v3M4 8h16M6 5h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"),
+  target: '<circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/>',
+  book: stroke("M12 6c-1.6-1.2-3.6-2-6-2v13c2.4 0 4.4.8 6 2 1.6-1.2 3.6-2 6-2V4c-2.4 0-4.4.8-6 2zM12 6v13"),
+  trophy: stroke("M8 4h8v4a4 4 0 0 1-8 0V4zM8 6H5v1a3 3 0 0 0 3 3M16 6h3v1a3 3 0 0 1-3 3M10 14h4M9 20h6M12 14v3"),
+  star: fill("M12 3l2.5 5.2 5.7.8-4.1 4 1 5.7L12 16l-5.1 2.7 1-5.7-4.1-4 5.7-.8L12 3z"),
+  fire: '<path d="M12 3c1 3-2 4-2 7a2 2 0 1 0 4 0c0-1 1-1.5 1-1.5.5 1.5 1 2.3 1 4a5 5 0 1 1-10 0c0-4 4-5 6-9.5z" fill="currentColor"/>',
+  medal: `<circle cx="12" cy="14" r="6" stroke="currentColor" stroke-width="2"/>${stroke("M9 3l3 5 3-5")}<path d="M12 11l1 2 2 .2-1.5 1.4.4 2-1.9-1-1.9 1 .4-2L9 13.2l2-.2 1-2z" fill="currentColor"/>`,
+  shoe: stroke("M3 15h9l4 2h4a1 1 0 0 1 1 1v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-4zM6 15l-1-4 3-1 2 3"),
+  check: stroke("M5 13l4 4 10-11", 2.5),
+  crown: '<path d="M4 8l3.5 3L12 5l4.5 6L20 8l-1.5 10h-13L4 8z" fill="currentColor"/>',
+  bulb: `${stroke("M9 18h6M10 21h4")}<path d="M12 3a6 6 0 0 0-3.5 10.9c.5.4.5 1 .5 1.6h6c0-.6 0-1.2.5-1.6A6 6 0 0 0 12 3z" stroke="currentColor" stroke-width="2"/>`,
+  heart: fill("M12 20s-7-4.4-9-8.2C1.5 8.7 3 5.5 6 5.5c2 0 3 1.5 3.6 2.4C10 7 11.4 5.5 13.4 5.5c3 0 4.6 3.2 3 6.3C15.4 15.6 12 20 12 20z"),
+  drop: fill("M12 3c3 4 6 6.5 6 10a6 6 0 1 1-12 0c0-3.5 3-6 6-10z"),
+  moon: fill("M20 14a8 8 0 0 1-10.5-10 8 8 0 1 0 10.5 10z"),
+  music: `${stroke("M9 18V6l10-2v12")}<circle cx="7" cy="18" r="2" fill="currentColor"/><circle cx="17" cy="16" r="2" fill="currentColor"/>`,
+  art: '<circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="2"/><circle cx="8.5" cy="10" r="1.2" fill="currentColor"/><circle cx="12" cy="8" r="1.2" fill="currentColor"/><circle cx="15.5" cy="10" r="1.2" fill="currentColor"/><path d="M12 20a2.2 2.2 0 0 1-2-2c0-2 4-1.5 4-4" stroke="currentColor" stroke-width="2"/>',
+  tooth: '<path d="M7 4c1.8 0 2.5 1 5 1s3.2-1 5-1 3 3 2 7c-.7 3-1 8-2.5 8s-1-4-2.5-4-1 4-2.5 4-1.8-5-2.5-8c-1-4 1-7 0-8z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>',
+  ball: `<circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="2"/>${stroke("M3.5 12h17M12 3.5v17M6 6c3 2 3 10 0 12M18 6c-3 2-3 10 0 12", 1.7)}`,
+  gift: `${stroke("M4 12h16M12 8v12M6 20h12V12H6v8zM6 12V9h12v3")}<path d="M12 8S10 3 8 4.5 10 8 12 8zM12 8s2-5 4-3.5S14 8 12 8z" stroke="currentColor" stroke-width="1.8"/>`,
+  think: `<circle cx="12" cy="11" r="7.5" stroke="currentColor" stroke-width="2"/>${stroke("M12 12v.01M12 6.5a2.5 2.5 0 0 1 1 4.8c-.6.3-1 .8-1 1.7", 2)}`,
+  clock: `<circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="2"/>${stroke("M12 7v5l3 2")}`,
+};
+const icon = (name, size = "1.2em") => svg(ICONS[name] || ICONS.star, size);
+
+function mascotSvg(size = "2.4rem") {
+  const rays = Array.from({ length: 8 }, (_, i) => {
+    const a = (i * Math.PI) / 4;
+    const x2 = 24 + Math.cos(a) * 20, y2 = 24 + Math.sin(a) * 20;
+    const x1 = 24 + Math.cos(a) * 15, y1 = 24 + Math.sin(a) * 15;
+    return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>`;
+  }).join("");
+  return `<svg viewBox="0 0 48 48" width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${rays}<circle cx="24" cy="24" r="11" fill="#fbbf24"/><circle cx="20" cy="23" r="1.6" fill="#7c4a03"/><circle cx="28" cy="23" r="1.6" fill="#7c4a03"/><path d="M19 27c1.5 2.5 8.5 2.5 10 0" stroke="#7c4a03" stroke-width="2" stroke-linecap="round" fill="none"/></svg>`;
+}
+
+const RATING_WORDS = ["Rough", "Meh", "Okay", "Good", "Great"];
+
+function faceSvg(n, size = "1.9rem") {
+  const eyes = n === 5
+    ? '<path d="M17 22l1.5 1.5L20 22M28 22l1.5 1.5L31 22" stroke="#7c4a03" stroke-width="2" stroke-linecap="round" fill="none"/>'
+    : '<circle cx="18.5" cy="22" r="1.8" fill="#7c4a03"/><circle cx="29.5" cy="22" r="1.8" fill="#7c4a03"/>';
+  const mouths = {
+    1: '<path d="M16 33c2-4 14-4 16 0" stroke="#7c4a03" stroke-width="2.4" stroke-linecap="round" fill="none"/>',
+    2: '<path d="M16 32c2-2 14-2 16 0" stroke="#7c4a03" stroke-width="2.4" stroke-linecap="round" fill="none"/>',
+    3: '<path d="M17 31h14" stroke="#7c4a03" stroke-width="2.4" stroke-linecap="round"/>',
+    4: '<path d="M16 29c2 4 14 4 16 0" stroke="#7c4a03" stroke-width="2.4" stroke-linecap="round" fill="none"/>',
+    5: '<path d="M15 28c3 7 15 7 18 0z" fill="#7c4a03"/>',
+  };
+  return `<svg viewBox="0 0 48 48" width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="24" cy="24" r="20" fill="#fde68a" stroke="#f59e0b" stroke-width="2"/>${eyes}${mouths[n]}</svg>`;
+}
+
+/* --- module state --------------------------------------------------------- */
+
+let state = sanitizeState({});
+let screen = "today";
+let editDate = todayStr();
+let draft = null;
+let goalDraft = null;
+let capsuleDraft = null;
+let toast = "";
+let confirmDelete = false;
+let showExport = false;
+let saveState = { kind: "idle", at: 0 };
+let lastNoteText = null;
+
+const $ = (id) => document.getElementById(id);
+const rootEl = () => $("root");
+
+const inSN = (() => { try { return window.parent && window.parent !== window; } catch { return false; } })();
+const LS_KEY = "day-tracker-state-v1";
+let lsTimer = null;
+
+/* --- persistence ---------------------------------------------------------- */
+
+/* The note's text gets a coarse summary only - never journal content, and
+   never anything that changes many times a day. Fewer text changes means
+   fewer note revisions. See the README notes on revision history. */
+function noteSummary() {
+  if (state.settings.notePrivacy === "minimal") return "My Day — private";
+  const lvl = levelFor(state.points);
+  return [
+    `My Day — ${state.name}`,
+    `${lvl.name} · ${state.points} points`,
+    `Days logged: ${Object.keys(state.days).length} · Badges: ${state.badges.length}/${BADGES.length}`,
+  ].join("\n");
+}
+const notePreview = () =>
+  state.settings.notePrivacy === "minimal"
+    ? "My Day"
+    : `${state.name} · ${levelFor(state.points).name} · ${state.points} pts`;
+
+function setSaveStatus(kind) {
+  saveState = { kind, at: Date.now() };
+  const el = $("savestatus");
+  if (!el) return;
+  const map = {
+    saving: ["Saving…", ""],
+    saved: ["Saved ✓", "ok"],
+    error: ["Couldn’t save — copy your data from Rewards", "err"],
+  };
+  const entry = map[kind];
+  if (!entry) { el.textContent = ""; el.className = ""; return; }
+  el.textContent = entry[0];
+  el.className = entry[1];
+  if (kind === "saved") {
+    setTimeout(() => {
+      if (saveState.kind === "saved" && $("savestatus") === el) {
+        el.textContent = ""; el.className = "";
+      }
+    }, 2000);
+  }
+}
+
+/* Save. Failures are surfaced, never swallowed - silent data loss is the
+   worst possible bug in a journal. */
+function save() {
+  setSaveStatus("saving");
+  if (inSN) {
+    try {
+      O.default.extensionMeta = state;
+      const summary = noteSummary();
+      if (summary !== lastNoteText) {
+        O.default.text = summary;
+        O.default.preview = notePreview();
+        lastNoteText = summary;
+      }
+      setSaveStatus("saved");
+    } catch (err) {
+      console.error("My Day: save failed", err);
+      setSaveStatus("error");
+    }
+    return;
+  }
+  clearTimeout(lsTimer);
+  lsTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(state));
+      setSaveStatus("saved");
+    } catch (err) {
+      console.error("My Day: save failed", err);
+      setSaveStatus("error");
+    }
+  }, 150);
+}
+
+function loadState(raw) {
+  try { state = sanitizeState(raw); }
+  catch (err) { console.error("My Day: could not read saved data", err); state = sanitizeState({}); }
+}
+
+/* --- draft (the day being edited) ----------------------------------------- */
+
+function ensureDraft() {
+  if (draft && draft.date === editDate) return;
+  const d = state.days[editDate];
+  draft = {
+    date: editDate,
+    steps: d ? d.steps : 0,
+    rating: d ? d.rating : 0,
+    goalsDone: new Set(d ? d.goalsDone : []),
+    goalCounts: Object.assign(Object.create(null), d ? d.goalCounts : null),
+    wins: d ? d.wins : "",
+    differently: d ? d.differently : "",
+    journal: d ? d.journal : "",
+    quest: d ? d.quest : false,
+  };
+}
+
+const numFrom = (el, max) => clamp(parseInt((el.value || "0").replace(/[^0-9]/g, ""), 10) || 0, 0, max);
+
+function readInputs() {
+  ensureDraft();
+  if ($("steps")) draft.steps = numFrom($("steps"), 500000);
+  if ($("wins")) draft.wins = $("wins").value.slice(0, 1000);
+  if ($("differently")) draft.differently = $("differently").value.slice(0, 1000);
+  if ($("journal")) draft.journal = $("journal").value.slice(0, 4000);
+  for (const g of state.goals) {
+    if (g.type === "count") {
+      const el = $("gc_" + g.id);
+      if (el) draft.goalCounts[g.id] = numFrom(el, 1000000);
+    }
+  }
+}
+
+function readGoalDraft() {
+  if (!goalDraft) return;
+  if ($("goalname")) goalDraft.name = $("goalname").value.slice(0, 40);
+  if ($("goaltarget")) goalDraft.target = clamp(parseInt($("goaltarget").value || "10", 10) || 10, 1, 100000);
+  if ($("goalunit")) goalDraft.unit = $("goalunit").value.slice(0, 16);
+}
+
+function readCapsuleDraft() {
+  if (!capsuleDraft) return;
+  if ($("captext")) capsuleDraft.text = $("captext").value.slice(0, 1000);
+  if ($("capdate")) capsuleDraft.openOn = $("capdate").value;
+}
+
+/* Points only ever go up. Editing or deleting a day never takes points away -
+   losing progress you already earned is the sharpest edge in a kid's tracker. */
+function saveDay() {
+  readInputs();
+  const date = editDate;
+  const entry = {
+    steps: draft.steps,
+    rating: draft.rating,
+    goalsDone: [...draft.goalsDone],
+    goalCounts: Object.assign({}, draft.goalCounts),
+    wins: draft.wins,
+    differently: draft.differently,
+    journal: draft.journal,
+    quest: draft.quest,
+    savedPoints: 0,
+  };
+  const previous = state.days[date] ? state.days[date].savedPoints : 0;
+  const earned = pointsForDay(entry, state.stepGoal, state.goals);
+  entry.savedPoints = Math.max(previous, earned);
+  state.days[date] = entry;
+  state.points += Math.max(0, earned - previous);
+
+  const st = computeStreak(state);
+  state.streak = st.current;
+  if (st.best > state.bestStreak) state.bestStreak = st.best;
+  state.lastSavedDate = Object.keys(state.days).sort().slice(-1)[0] || "";
+
+  const won = awardBadges(state);
+  const gain = Math.max(0, earned - previous);
+  if (won.length) {
+    toast = "New badge: " + won.map((b) => b.name).join(", ") + "!";
+  } else {
+    const mood = entry.rating === 5 ? "rated5" : entry.rating && entry.rating <= 2 ? "rated1" : "saved";
+    toast = mascotSays(state, mood) + (gain > 0 ? `  +${gain} pts` : "");
+  }
+  save();
+  render();
+}
+
+function deleteDay() {
+  if (state.days[editDate]) {
+    delete state.days[editDate];
+    const st = computeStreak(state);
+    state.streak = st.current;
+    draft = null;
+    toast = "Day deleted. Your points are safe.";
+  }
+  confirmDelete = false;
+  save();
+  render();
+}
+
+/* --- views ---------------------------------------------------------------- */
+
+function ringSvg(value, goal) {
+  const c = 2 * Math.PI * 52;
+  const ratio = goal > 0 ? value / goal : 0;
+  const off = c * (1 - Math.min(ratio, 1));
+  const pct = Math.round(ratio * 100);
+  return `<svg class="ring" viewBox="0 0 120 120" role="img" aria-label="${pct}% of your step goal">
     <defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f59e0b"/><stop offset="1" stop-color="#fb923c"/></linearGradient></defs>
     <circle class="bg" cx="60" cy="60" r="52" fill="none" stroke-width="12"/>
-    <circle class="fg" cx="60" cy="60" r="52" fill="none" stroke-width="12" stroke-dasharray="${n.toFixed(1)}" stroke-dashoffset="${l.toFixed(1)}" transform="rotate(-90 60 60)"/>
-    <text x="60" y="58" text-anchor="middle" font-size="22" font-weight="800" fill="currentColor">${y}%</text>
-    <text x="60" y="76" text-anchor="middle" font-size="10" fill="currentColor" opacity=".6">of goal</text></svg>`}function K(){let t=L(o.points),e=ot(o.points),a=t.at,n=e?e.at:t.at+1,r=e?D((o.points-a)/(n-a),0,1):1;return`
+    <circle class="fg" cx="60" cy="60" r="52" fill="none" stroke-width="12" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" transform="rotate(-90 60 60)"/>
+    <text x="60" y="58" text-anchor="middle" font-size="22" font-weight="800" fill="currentColor">${pct}%</text>
+    <text x="60" y="76" text-anchor="middle" font-size="10" fill="currentColor" opacity=".6">of goal</text></svg>`;
+}
+
+function headerView() {
+  const lvl = levelFor(state.points);
+  const nxt = nextLevel(state.points);
+  const from = lvl.at;
+  const to = nxt ? nxt.at : lvl.at + 1;
+  const pct = nxt ? clamp((state.points - from) / (to - from), 0, 1) : 1;
+  const dayCount = Object.keys(state.days).length;
+  // Streak is only mentioned once it is a happy fact. Never shown at 0 or 1,
+  // so a gap never renders as a visible failure.
+  const streakLine = state.streak >= 2
+    ? `<div class="streakline">${icon("fire")} ${state.streak} days in a row!</div>` : "";
+  return `
   <div class="hero">
-    <div class="mascot">${ct()}</div>
-    <div class="hellowrap"><div class="hello">Hi ${u(o.name)}!</div><div class="mascot-say">${u(Z(o,"greet"))}</div></div>
+    <div class="mascot">${mascotSvg()}</div>
+    <div class="hellowrap">
+      <div class="hello">Hi ${esc(state.name)}!</div>
+      <div class="mascot-say">${esc(mascotSays(state, "greet"))}</div>
+      ${streakLine}
+    </div>
   </div>
   <div class="chips">
-    <div class="chip streak"><div class="cn">${h("fire")} ${o.streak}</div><div class="cl">Streak</div></div>
-    <div class="chip level"><div class="cn">${h(t.icon)}</div><div class="cl">${u(t.name)}</div></div>
-    <div class="chip points"><div class="cn">${h("star")} ${o.points}</div><div class="cl">Points</div></div>
+    <div class="chip days"><div class="cn">${icon("calendar")} ${dayCount}</div><div class="cl">Days</div></div>
+    <div class="chip level"><div class="cn">${icon(lvl.icon)}</div><div class="cl">${esc(lvl.name)}</div></div>
+    <div class="chip points"><div class="cn">${icon("star")} ${state.points}</div><div class="cl">Points</div></div>
   </div>
   <div class="levelbar">
-    <div class="levelrow"><span>${h(t.icon)} ${u(t.name)}</span><span class="sub">${e?`${n-o.points} pts to ${u(e.name)}`:"Max rank!"}</span></div>
-    <div class="xpbar"><div class="xpfill" style="width:${Math.round(r*100)}%"></div></div>
-  </div>`}function Tt(){let t=(e,a,n)=>`<button class="navbtn ${I===e?"on":""}" data-action="nav" data-nav="${e}"><span class="ni">${h(a,"1.5rem")}</span><span class="nl">${n}</span></button>`;return`<div class="nav">${t("today","calendar","Today")}${t("goals","target","Goals")}${t("history","book","History")}${t("rewards","trophy","Rewards")}</div>`}function At(){let t=$(),e=g<t;return`
+    <div class="levelrow"><span>${icon(lvl.icon)} ${esc(lvl.name)}</span><span class="sub">${nxt ? `${to - state.points} pts to ${esc(nxt.name)}` : "Max rank!"}</span></div>
+    <div class="xpbar"><div class="xpfill" style="width:${Math.round(pct * 100)}%"></div></div>
+  </div>`;
+}
+
+function navView() {
+  const tab = (id, ic, label) =>
+    `<button class="navbtn ${screen === id ? "on" : ""}" role="tab" aria-selected="${screen === id}" aria-controls="panel" data-action="nav" data-nav="${id}"><span class="ni">${icon(ic, "1.5rem")}</span><span class="nl">${label}</span></button>`;
+  return `<nav class="nav" role="tablist" aria-label="Sections">${tab("today","calendar","Today")}${tab("goals","target","Goals")}${tab("history","book","History")}${tab("capsule","gift","Letters")}${tab("rewards","trophy","Rewards")}</nav>`;
+}
+
+function dateNavView() {
+  const t = todayStr();
+  return `
   <div class="datenav">
-    <button class="ghost dnav" data-action="prev-day" aria-label="Previous day">\u2039</button>
-    <div class="dlabel"><div class="dtitle">${u(U(g))}</div><div class="dsmall">${u(R(g))}</div></div>
-    <button class="ghost dnav" data-action="next-day" ${e?"":"disabled"} aria-label="Next day">\u203A</button>
+    <button class="ghost dnav" data-action="prev-day" aria-label="Previous day">&lsaquo;</button>
+    <div class="dlabel"><div class="dtitle">${esc(relDate(editDate))}</div><div class="dsmall">${esc(prettyDate(editDate))}</div></div>
+    <button class="ghost dnav" data-action="next-day" ${editDate < t ? "" : "disabled"} aria-label="Next day">&rsaquo;</button>
   </div>
   <div class="daterow">
-    <input type="date" id="editdate" class="dateinput" value="${g}" max="${t}"/>
-    ${g!==t?'<button class="ghost" data-action="jump-today">Jump to today</button>':""}
-  </div>`}function Gt(t){if(W(),t.type==="count"){let a=c.goalCounts[t.id]||0;return`<div class="goal count ${t.target>0&&a>=t.target?"done":""}">
-      <span class="ge">${h(t.icon,"1.4rem")}</span>
-      <span class="gn">${u(t.name)} <span class="gtarget">${a}/${t.target}${t.unit?" "+u(t.unit):""}</span></span>
+    <label class="small" for="editdate" style="align-self:center">Pick a day</label>
+    <input type="date" id="editdate" class="dateinput" value="${editDate}" max="${t}"/>
+    ${editDate !== t ? '<button class="ghost" data-action="jump-today">Jump to today</button>' : ""}
+  </div>`;
+}
+
+function goalRowView(g) {
+  ensureDraft();
+  if (g.type === "count") {
+    const v = draft.goalCounts[g.id] || 0;
+    const done = g.target > 0 && v >= g.target;
+    return `<div class="goal count ${done ? "done" : ""}">
+      <span class="ge" aria-hidden="true">${icon(g.icon, "1.4rem")}</span>
+      <span class="gn"><label for="gc_${g.id}">${esc(g.name)}</label> <span class="gtarget">${v}/${g.target}${g.unit ? " " + esc(g.unit) : ""}</span></span>
       <span class="gcount">
-        <button class="stepbtn rnd" data-action="gc-add" data-id="${t.id}" data-add="-1">\u2212</button>
-        <input id="gc_${t.id}" class="gcinput" type="number" inputmode="numeric" value="${a||""}" min="0" max="1000000"/>
-        <button class="stepbtn rnd" data-action="gc-add" data-id="${t.id}" data-add="1">+</button>
-      </span></div>`}let e=c.goalsDone.has(t.id);return`<div class="goal ${e?"done":""}" data-action="goal-toggle" data-id="${t.id}">
-    <span class="ge">${h(t.icon,"1.4rem")}</span><span class="gn">${u(t.name)}</span>
-    <span class="gcheckbox ${e?"on":""}">${e?h("check","1rem"):""}</span></div>`}function Lt(){W();let t=g===$(),e=!!o.days[g],a=o.goals.length?o.goals.map(Gt).join(""):'<div class="empty">No goals yet \u2014 add some on the Goals tab.</div>',n=Array.from({length:5},(l,y)=>{let s=y+1;return`<button class="face ${c.rating===s?"on":""}" data-action="set-rating" data-rate="${s}"><span class="faceic">${X(s,"1.9rem")}</span><span class="facelbl">${q[y]}</span></button>`}).join(""),r=e?w?'<div class="confirm">Delete this day? <button class="ghost" data-action="delete-cancel">No</button> <button class="danger" data-action="delete-day">Yes, delete</button></div>':'<button class="ghost danger-ghost" data-action="delete-ask">Delete this day</button>':"";return`
-  ${At()}
+        <button class="stepbtn rnd" data-action="gc-add" data-id="${g.id}" data-add="-1" aria-label="Less ${esc(g.name)}">&minus;</button>
+        <input id="gc_${g.id}" class="gcinput" type="number" inputmode="numeric" value="${v || ""}" min="0" max="1000000"/>
+        <button class="stepbtn rnd" data-action="gc-add" data-id="${g.id}" data-add="1" aria-label="More ${esc(g.name)}">+</button>
+      </span></div>`;
+  }
+  const on = draft.goalsDone.has(g.id);
+  return `<button type="button" class="goal ${on ? "done" : ""}" role="checkbox" aria-checked="${on}" data-action="goal-toggle" data-id="${g.id}">
+    <span class="ge" aria-hidden="true">${icon(g.icon, "1.4rem")}</span><span class="gn">${esc(g.name)}</span>
+    <span class="gcheckbox ${on ? "on" : ""}" aria-hidden="true">${on ? icon("check", "1rem") : ""}</span></button>`;
+}
+
+function questView() {
+  ensureDraft();
+  const q = questFor(editDate);
+  return `<div class="card">
+    <div class="section-title">${icon("think")} Today's mini-quest</div>
+    <div class="sub">A tiny extra thing, just for fun. Skipping it costs nothing.</div>
+    <button type="button" class="quest ${draft.quest ? "done" : ""}" role="checkbox" aria-checked="${draft.quest}" data-action="quest-toggle">
+      <span class="gcheckbox ${draft.quest ? "on" : ""}" aria-hidden="true">${draft.quest ? icon("check", "1rem") : ""}</span>
+      <span class="qt">${esc(q)}</span>
+    </button>
+  </div>`;
+}
+
+function todayView() {
+  ensureDraft();
+  const isToday = editDate === todayStr();
+  const saved = !!state.days[editDate];
+  const goals = state.goals.length
+    ? state.goals.map(goalRowView).join("")
+    : '<div class="empty">No goals yet — add some on the Goals tab.</div>';
+  const faces = Array.from({ length: 5 }, (_, i) => {
+    const n = i + 1;
+    return `<button class="face ${draft.rating === n ? "on" : ""}" role="radio" aria-checked="${draft.rating === n}" data-action="set-rating" data-rate="${n}"><span class="faceic" aria-hidden="true">${faceSvg(n)}</span><span class="facelbl">${RATING_WORDS[i]}</span></button>`;
+  }).join("");
+  const del = saved
+    ? confirmDelete
+      ? '<div class="confirm">Delete this day? <button class="ghost" data-action="delete-cancel">No</button> <button class="danger" data-action="delete-day">Yes, delete</button></div>'
+      : '<button class="ghost danger-ghost" data-action="delete-ask">Delete this day</button>'
+    : "";
+  return `
+  ${dateNavView()}
   <div class="card">
-    <div class="section-title">${h("shoe")} Steps</div>
-    <div class="ring-wrap">${Nt(c.steps,o.stepGoal)}
-      <div class="ring-steps"><label>My steps</label>
-        <input id="steps" class="stepinput" type="number" inputmode="numeric" value="${c.steps||""}" placeholder="0" min="0" max="500000"/>
-        <div class="goaltag">Goal: ${o.stepGoal.toLocaleString()} steps</div>
+    <div class="section-title">${icon("shoe")} Steps</div>
+    <div class="ring-wrap">${ringSvg(draft.steps, state.stepGoal)}
+      <div class="ring-steps"><label for="steps">My steps</label>
+        <input id="steps" class="stepinput" type="number" inputmode="numeric" value="${draft.steps || ""}" placeholder="0" min="0" max="500000"/>
+        <div class="goaltag">Goal: ${state.stepGoal.toLocaleString()} steps</div>
         <div class="stepbtns">
           <button class="stepbtn" data-action="step-add" data-add="1000">+1,000</button>
           <button class="stepbtn" data-action="step-add" data-add="2000">+2,000</button>
@@ -247,40 +903,384 @@
           <button class="stepbtn" data-action="step-clear">Clear</button>
         </div></div></div>
   </div>
-  <div class="card"><div class="section-title">How was your day?</div><div class="faces">${n}</div></div>
-  <div class="card"><div class="section-title">${h("target")} My goals</div><div class="goals-list">${a}</div></div>
+  <div class="card"><div class="section-title" id="ratelbl">How was your day?</div><div class="faces" role="radiogroup" aria-labelledby="ratelbl">${faces}</div></div>
+  ${questView()}
+  <div class="card"><div class="section-title">${icon("target")} My goals</div><div class="goals-list">${goals}</div></div>
   <div class="card">
-    <div class="field"><label>${h("star")} What did you do great today?</label><textarea id="wins" placeholder="I was kind to my sister\u2026">${u(c.wins)}</textarea></div>
-    <div class="field" style="margin-top:12px"><label>${h("bulb")} One thing you'd do differently?</label><textarea id="differently" placeholder="I'd start my homework earlier\u2026">${u(c.differently)}</textarea></div>
+    <div class="field"><label for="wins">${icon("star")} What did you do great today?</label><textarea id="wins" placeholder="I was kind to my sister…">${esc(draft.wins)}</textarea></div>
+    <div class="field" style="margin-top:12px"><label for="differently">${icon("bulb")} One thing you'd do differently?</label><textarea id="differently" placeholder="I'd start my homework earlier…">${esc(draft.differently)}</textarea></div>
   </div>
-  <div class="card"><div class="field"><label>${h("book")} Journal</label><textarea id="journal" placeholder="Today I\u2026">${u(c.journal)}</textarea></div></div>
-  <button class="primary" data-action="save-day">${t?"Save my day":"Save this day"}</button>
-  ${r}`}function Et(){let t=o.goals.length?o.goals.map(a=>`<div class="goalmanage"><span class="ge">${h(a.icon,"1.4rem")}</span><span class="gn">${u(a.name)}${a.type==="count"?` <span class="gtarget">target ${a.target}${a.unit?" "+u(a.unit):""}</span>`:""}</span><button class="del" data-action="goal-remove" data-id="${a.id}">Remove</button></div>`).join(""):'<div class="empty">No goals yet. Add one below!</div>',e=v?`<div class="goaledit">
-      <div class="small">Pick an icon:</div>
-      <div class="emojipick">${V.map(a=>`<button class="ep ${v.icon===a?"on":""}" data-action="goal-icon" data-icon="${a}">${h(a,"1.4rem")}</button>`).join("")}</div>
-      <input id="goalname" type="text" placeholder="My goal (like: Read for 20 minutes)" value="${u(v.name)}" maxlength="40"/>
-      <div class="small">Goal type:</div>
-      <div class="rowbtns">
-        <button class="ghost ${v.type==="check"?"sel":""}" data-action="goal-type" data-type="check">\u2611 Check off</button>
-        <button class="ghost ${v.type==="count"?"sel":""}" data-action="goal-type" data-type="count">123 Count up</button>
-      </div>
-      ${v.type==="count"?`<div class="countcfg"><label>Reach</label><input id="goaltarget" type="number" value="${v.target}" min="1" max="100000" class="tnum"/><input id="goalunit" type="text" value="${u(v.unit)}" placeholder="minutes" maxlength="16" class="tunit"/></div>`:""}
-      <div class="rowbtns"><button class="ghost" data-action="goal-cancel">Cancel</button><button class="primary pshort" data-action="goal-save">Add goal</button></div>
-    </div>`:'<button class="ghost" data-action="goal-add-start" style="width:100%;margin-top:10px">+ Add a goal</button>';return`
-  <div class="card"><div class="section-title">${h("shoe")} Step goal</div><div class="sub">How many steps do you want each day?</div>
-    <input id="stepgoal" type="number" class="stepinput" style="font-size:1.3rem" value="${o.stepGoal}" min="100" max="100000" step="100"/>
-    <button class="ghost" data-action="stepgoal-set" style="width:100%;margin-top:8px">Save step goal</button></div>
-  <div class="card"><div class="section-title">${h("target")} My goals</div>
-    <div class="sub">Check-off goals you tick, or count-up goals that reach a number.</div>
-    <div class="goals-list">${t}</div>${e}</div>`}function zt(){let t=Object.keys(o.days).sort().reverse();if(!t.length)return'<div class="card"><div class="empty">No days saved yet. Check in on the Today tab!</div></div>';let e=t.map(a=>{let n=o.days[a],r=F(n,o.goals);return`<div class="hrow" data-action="view-day" data-date="${a}"><span class="hface">${n.rating?X(n.rating,"1.6rem"):""}</span>
-      <span class="hinfo"><span class="hdate">${u(U(a))} \xB7 ${u(R(a))}</span><span class="hsteps">${n.steps.toLocaleString()} steps${r?` \xB7 ${r} goals`:""}</span></span>
-      <span class="hgo">\u203A</span></div>`}).join("");return`<div class="card"><div class="section-title">${h("book")} My days <span class="small" style="font-weight:600">(tap to view or edit)</span></div><div class="hlist">${e}</div></div>`}function Rt(){let t=L(o.points),e=G.map(n=>`<div class="rl ${o.points>=n.at?"got":""} ${t.name===n.name?"now":""}"><span>${h(n.icon)} ${u(n.name)}</span><span class="rlxp">${n.at} pts</span></div>`).join(""),a=_.map(n=>{let r=o.badges.includes(n.id);return`<div class="badge ${r?"got":""}"><span class="be">${r?h(n.icon,"1.5rem"):h("star","1.5rem")}</span><span><span class="bn">${u(n.name)}</span><br><span class="bd">${u(n.desc)}</span></span></div>`}).join("");return`
-  <div class="card center"><div style="transform:scale(1.6);margin:6px 0 10px">${h(t.icon,"2rem")}</div><div style="font-weight:800;font-size:1.25rem">${u(t.name)}</div>
-    <div class="small">${o.points} points \xB7 ${o.streak}-day streak \xB7 best ${o.bestStreak}</div></div>
-  <div class="card"><div class="section-title">Badges</div><div class="badges">${a}</div></div>
-  <div class="card"><div class="section-title">Ranks</div><div class="ladder">${e}</div></div>
-  <div class="card"><div class="section-title">My name</div><input id="nameinput" type="text" class="stepinput" style="font-size:1.1rem" value="${u(o.name)}" maxlength="24"/><button class="ghost" data-action="set-name" style="width:100%;margin-top:8px">Save name</button></div>`}function p(){let t=Ct();if(!t)return;let e=E;E="";let a;I==="goals"?a=K()+Et():I==="history"?a=K()+zt():I==="rewards"?a=K()+Rt():a=K()+Lt(),t.innerHTML=(e?`<div class="toast">${u(e)}</div>`:"")+a+Tt()}function Pt(t){let e=t.target.closest?t.target.closest("[data-action]"):null;if(!e||e.hasAttribute("disabled"))return;switch(e.getAttribute("data-action")){case"nav":return I=e.getAttribute("data-nav"),I==="today"&&(g=$(),c=null),v=null,w=!1,p();case"prev-day":return C(),g=T(g,-1),c=null,w=!1,p();case"next-day":return g<$()&&(C(),g=T(g,1),c=null,w=!1),p();case"jump-today":return g=$(),c=null,w=!1,p();case"set-rating":return C(),c.rating=parseInt(e.getAttribute("data-rate"),10)||0,p();case"goal-toggle":{C();let n=e.getAttribute("data-id");return c.goalsDone.has(n)?c.goalsDone.delete(n):c.goalsDone.add(n),p()}case"gc-add":{C();let n=e.getAttribute("data-id");return c.goalCounts[n]=D((c.goalCounts[n]||0)+(parseInt(e.getAttribute("data-add"),10)||0),0,1e6),p()}case"step-add":return C(),c.steps=D(c.steps+(parseInt(e.getAttribute("data-add"),10)||0),0,5e5),p();case"step-clear":return W(),c.steps=0,p();case"save-day":return jt();case"delete-ask":return w=!0,p();case"delete-cancel":return w=!1,p();case"delete-day":return Ot();case"goal-add-start":return v={name:"",icon:"star",type:"check",target:20,unit:"minutes"},p();case"goal-cancel":return v=null,p();case"goal-icon":return tt(),v.icon=e.getAttribute("data-icon"),p();case"goal-type":return tt(),v.type=e.getAttribute("data-type")==="count"?"count":"check",p();case"goal-save":{tt();let n=(v.name||"").trim();if(n){let r={id:"g"+Math.random().toString(36).slice(2,9),name:n.slice(0,40),icon:v.icon||"star",type:v.type};r.type==="count"&&(r.target=D(v.target||10,1,1e5),r.unit=(v.unit||"").slice(0,16)),o.goals.push(r),v=null,Q(o),A()}return p()}case"goal-remove":{let n=e.getAttribute("data-id");return o.goals=o.goals.filter(r=>r.id!==n),c&&c.goalsDone.delete(n),A(),p()}case"stepgoal-set":{let n=S("stepgoal");return n&&(o.stepGoal=D(parseInt(n.value||"8000",10)||8e3,100,1e5),A()),p()}case"view-day":return g=e.getAttribute("data-date"),I="today",c=null,w=!1,p();case"set-name":{let n=S("nameinput");return n&&(o.name=(n.value||"Ricky").slice(0,24)||"Ricky",A()),p()}}}function Ft(t){let e=t.target;if(!(!e||!e.id)){if(e.id==="editdate"){let a=e.value;z(a)&&(g=a>$()?$():a,c=null,w=!1,p());return}e.id.indexOf("gc_")===0&&(C(),p())}}function et(){document.addEventListener("click",Pt),document.addEventListener("change",Ft),p(),window.__day={state:()=>o,screen:()=>I,editDate:()=>g}}var H=!1;if(ut)O.default.initialize(),O.default.subscribe(()=>{if(H)return;H=!0;let t=O.default.extensionMeta;t&&t.version&&dt(t),et()}),setTimeout(()=>{H||(H=!0,et())},1500);else{try{let t=localStorage.getItem(pt);t&&dt(JSON.parse(t))}catch{}et()}})();
+  <div class="card"><div class="field"><label for="journal">${icon("book")} Journal</label><textarea id="journal" placeholder="Today I…">${esc(draft.journal)}</textarea></div></div>
+  <button class="primary" data-action="save-day">${isToday ? "Save my day" : "Save this day"}</button>
+  ${del}`;
+}
 
-</script>
+function goalsView() {
+  const list = state.goals.length
+    ? state.goals.map((g) => `<div class="goalmanage"><span class="ge" aria-hidden="true">${icon(g.icon, "1.4rem")}</span><span class="gn">${esc(g.name)}${g.type === "count" ? ` <span class="gtarget">target ${g.target}${g.unit ? " " + esc(g.unit) : ""}</span>` : ""}</span><button class="del" data-action="goal-remove" data-id="${g.id}" aria-label="Remove ${esc(g.name)}">Remove</button></div>`).join("")
+    : '<div class="empty">No goals yet. Add one below!</div>';
+  const editor = goalDraft
+    ? `<div class="goaledit">
+      <div class="small" id="iconlbl">Pick an icon:</div>
+      <div class="emojipick" role="radiogroup" aria-labelledby="iconlbl">${GOAL_ICONS.map((i) => `<button class="ep ${goalDraft.icon === i ? "on" : ""}" role="radio" aria-checked="${goalDraft.icon === i}" aria-label="${i}" data-action="goal-icon" data-icon="${i}">${icon(i, "1.4rem")}</button>`).join("")}</div>
+      <label class="small" for="goalname">Goal name</label>
+      <input id="goalname" type="text" placeholder="My goal (like: Read for 20 minutes)" value="${esc(goalDraft.name)}" maxlength="40"/>
+      <div class="small" id="typelbl">Goal type:</div>
+      <div class="rowbtns" role="radiogroup" aria-labelledby="typelbl">
+        <button class="ghost ${goalDraft.type === "check" ? "sel" : ""}" role="radio" aria-checked="${goalDraft.type === "check"}" data-action="goal-type" data-type="check">Check off</button>
+        <button class="ghost ${goalDraft.type === "count" ? "sel" : ""}" role="radio" aria-checked="${goalDraft.type === "count"}" data-action="goal-type" data-type="count">Count up</button>
+      </div>
+      ${goalDraft.type === "count" ? `<div class="countcfg"><label for="goaltarget">Reach</label><input id="goaltarget" type="number" value="${goalDraft.target}" min="1" max="100000" class="tnum"/><label class="small" for="goalunit">Unit</label><input id="goalunit" type="text" value="${esc(goalDraft.unit)}" placeholder="minutes" maxlength="16" class="tunit"/></div>` : ""}
+      <div class="rowbtns"><button class="ghost" data-action="goal-cancel">Cancel</button><button class="primary pshort" data-action="goal-save">Add goal</button></div>
+    </div>`
+    : '<button class="ghost" data-action="goal-add-start" style="width:100%;margin-top:10px">+ Add a goal</button>';
+  return `
+  <div class="card"><div class="section-title">${icon("shoe")} Step goal</div><div class="sub">How many steps do you want each day?</div>
+    <label class="small" for="stepgoal">Steps per day</label>
+    <input id="stepgoal" type="number" class="stepinput" style="font-size:1.3rem" value="${state.stepGoal}" min="100" max="100000" step="100"/>
+    <button class="ghost" data-action="stepgoal-set" style="width:100%;margin-top:8px">Save step goal</button></div>
+  <div class="card"><div class="section-title">${icon("target")} My goals</div>
+    <div class="sub">Check-off goals you tick, or count-up goals that reach a number.</div>
+    <div class="goals-list">${list}</div>${editor}</div>`;
+}
+
+/* Look-back: the strongest reason to keep a journal is rereading it. */
+function lookBackView() {
+  const keys = Object.keys(state.days).sort();
+  if (!keys.length) return "";
+  const today = todayStr();
+  const candidates = [
+    { d: addDays(today, -7), label: "A week ago" },
+    { d: addDays(today, -30), label: "A month ago" },
+    { d: addDays(today, -365), label: "A year ago" },
+  ].filter((c) => state.days[c.d]);
+  let pick = candidates[candidates.length - 1];
+  if (!pick) {
+    const past = keys.filter((k) => k !== today);
+    if (!past.length) return "";
+    const seed = today.split("-").join("");
+    pick = { d: past[Number(seed) % past.length], label: "Remember this day?" };
+  }
+  const day = state.days[pick.d];
+  const line = (day.journal || day.wins || day.differently || "").trim();
+  const strip = Array.from({ length: 14 }, (_, i) => {
+    const d = addDays(today, -(13 - i));
+    const e = state.days[d];
+    const cls = e && e.rating ? "r" + e.rating : "";
+    const lbl = e ? `${prettyDate(d)}: ${e.rating ? RATING_WORDS[e.rating - 1] : "logged"}` : `${prettyDate(d)}: no entry`;
+    return `<span class="sq ${cls}" title="${esc(lbl)}"></span>`;
+  }).join("");
+  return `<div class="card">
+    <div class="section-title">${icon("clock")} ${esc(pick.label)}</div>
+    <div class="small">${esc(relDate(pick.d))} · ${esc(prettyDate(pick.d))}</div>
+    ${line ? `<div style="margin-top:8px;white-space:pre-wrap;word-break:break-word">${esc(line.slice(0, 240))}${line.length > 240 ? "…" : ""}</div>` : '<div class="empty">You logged this day but didn\'t write anything.</div>'}
+    <button class="ghost" data-action="view-day" data-date="${pick.d}" style="width:100%;margin-top:10px">Open that day</button>
+    <div class="section-title" style="margin-top:14px;font-size:.95rem">Your last 2 weeks</div>
+    <div class="strip" role="img" aria-label="Your mood over the last 14 days">${strip}</div>
+  </div>`;
+}
+
+function historyView() {
+  const keys = Object.keys(state.days).sort().reverse();
+  if (!keys.length) return '<div class="card"><div class="empty">No days saved yet. Check in on the Today tab!</div></div>';
+  const rows = keys.map((k) => {
+    const d = state.days[k];
+    const done = goalsCompleted(d, state.goals);
+    return `<button type="button" class="hrow" data-action="view-day" data-date="${k}">
+      <span class="hface" aria-hidden="true">${d.rating ? faceSvg(d.rating, "1.6rem") : ""}</span>
+      <span class="hinfo"><span class="hdate">${esc(relDate(k))} · ${esc(prettyDate(k))}</span><span class="hsteps">${d.steps.toLocaleString()} steps${done ? ` · ${done} goals` : ""}</span></span>
+      <span class="hgo" aria-hidden="true">&rsaquo;</span></button>`;
+  }).join("");
+  return `${lookBackView()}<div class="card"><div class="section-title">${icon("book")} My days <span class="small" style="font-weight:600">(tap to view or edit)</span></div><div class="hlist">${rows}</div></div>`;
+}
+
+/* Time capsule: write now, read later. Entirely local, nothing scheduled,
+   nothing sent - it simply stays hidden until the date arrives. */
+function capsuleView() {
+  const today = todayStr();
+  const sorted = [...state.capsules].sort((a, b) => a.openOn.localeCompare(b.openOn));
+  const list = sorted.length
+    ? sorted.map((c) => {
+        const open = c.openOn <= today;
+        return `<div class="cap ${open ? "" : "locked"}">
+          <div class="capwhen">${open ? `${icon("gift")} Opened ${esc(prettyDate(c.openOn))}` : `${icon("clock")} Opens ${esc(prettyDate(c.openOn))} · ${dayDiff(today, c.openOn)} days to go`}</div>
+          ${open ? `<div class="captext">${esc(c.text)}</div><div class="small" style="margin-top:6px">Written ${esc(prettyDate(c.createdOn))}</div><button class="del" data-action="capsule-remove" data-id="${c.id}" style="margin-top:8px">Remove</button>` : `<div class="small">Sealed until then. No peeking!</div>`}
+        </div>`;
+      }).join("")
+    : '<div class="empty">No letters yet. Write one to open later!</div>';
+  const editor = capsuleDraft
+    ? `<div class="goaledit capnew">
+      <label class="small" for="captext">Your letter to future you</label>
+      <textarea id="captext" style="width:100%;min-height:100px;padding:10px;border:2px solid var(--border);border-radius:14px;background:var(--panel);color:var(--fg)" maxlength="1000" placeholder="Dear future me…">${esc(capsuleDraft.text)}</textarea>
+      <label class="small" for="capdate">Open it on</label>
+      <input id="capdate" type="date" value="${capsuleDraft.openOn}" min="${addDays(today, 1)}"/>
+      <div class="rowbtns"><button class="ghost" data-action="capsule-cancel">Cancel</button><button class="primary pshort" data-action="capsule-save">Seal it</button></div>
+    </div>`
+    : '<button class="ghost" data-action="capsule-start" style="width:100%;margin-top:10px">+ Write a letter</button>';
+  return `<div class="card">
+    <div class="section-title">${icon("gift")} Letters to future me</div>
+    <div class="sub">Write something now, and it stays sealed until the day you pick.</div>
+    ${list}${editor}</div>`;
+}
+
+function rewardsView() {
+  const lvl = levelFor(state.points);
+  const ladder = LEVELS.map((l) => `<div class="rl ${state.points >= l.at ? "got" : ""} ${lvl.name === l.name ? "now" : ""}" style="display:flex;justify-content:space-between;padding:6px 0"><span>${icon(l.icon)} ${esc(l.name)}</span><span class="small">${l.at} pts</span></div>`).join("");
+  const badges = BADGES.map((b) => {
+    const got = state.badges.includes(b.id);
+    return `<div class="badge ${got ? "got" : ""}" style="display:flex;gap:10px;align-items:center;padding:8px 0;${got ? "" : "opacity:.5"}"><span class="be">${icon(got ? b.icon : "star", "1.5rem")}</span><span><span class="bn" style="font-weight:800">${esc(b.name)}</span><br><span class="bd small">${esc(b.desc)}</span></span></div>`;
+  }).join("");
+  const exportBox = showExport
+    ? `<label class="small" for="exportdata">All your data (copy and keep it somewhere safe)</label>
+       <textarea id="exportdata" class="exportbox" readonly>${esc(JSON.stringify(state, null, 2))}</textarea>
+       <div class="rowbtns"><button class="ghost" data-action="export-copy">Copy to clipboard</button><button class="ghost" data-action="export-close">Close</button></div>`
+    : '<button class="ghost" data-action="export-open" style="width:100%">Show my data</button>';
+  const priv = state.settings.notePrivacy;
+  return `
+  <div class="card center"><div style="transform:scale(1.6);margin:6px 0 10px">${icon(lvl.icon, "2rem")}</div><div style="font-weight:800;font-size:1.25rem">${esc(lvl.name)}</div>
+    <div class="small">${state.points} points · ${Object.keys(state.days).length} days logged${state.bestStreak >= 3 ? ` · best run ${state.bestStreak} days` : ""}</div></div>
+  <div class="card"><div class="section-title">Badges</div><div class="badges">${badges}</div></div>
+  <div class="card"><div class="section-title">Ranks</div><div class="ladder">${ladder}</div></div>
+  <div class="card"><div class="section-title">My name</div>
+    <label class="small" for="nameinput">What should the sun call you?</label>
+    <input id="nameinput" type="text" class="stepinput" style="font-size:1.1rem" value="${esc(state.name)}" maxlength="24"/>
+    <button class="ghost" data-action="set-name" style="width:100%;margin-top:8px">Save name</button></div>
+  <div class="card"><div class="section-title">${icon("book")} What the note shows</div>
+    <div class="sub">Your writing is never put in the note. This only changes the little summary line.</div>
+    <div class="rowbtns" role="radiogroup" aria-label="Note text">
+      <button class="ghost ${priv === "summary" ? "sel" : ""}" role="radio" aria-checked="${priv === "summary"}" data-action="privacy" data-mode="summary">Show a summary</button>
+      <button class="ghost ${priv === "minimal" ? "sel" : ""}" role="radio" aria-checked="${priv === "minimal"}" data-action="privacy" data-mode="minimal">Show nothing</button>
+    </div></div>
+  <div class="card"><div class="section-title">${icon("drop")} Backup</div>
+    <div class="sub">Everything stays on this device. Copy it out now and then, just in case.</div>
+    ${exportBox}</div>`;
+}
+
+/* --- render --------------------------------------------------------------- */
+
+function focusKey(el) {
+  if (!el) return null;
+  if (el.id) return "#" + el.id;
+  const a = el.getAttribute && el.getAttribute("data-action");
+  if (!a) return null;
+  const extra = el.getAttribute("data-id") || el.getAttribute("data-nav") ||
+                el.getAttribute("data-rate") || el.getAttribute("data-date") || "";
+  return `[data-action="${a}"]` + (extra ? `[data-id="${extra}"],[data-action="${a}"][data-nav="${extra}"]` : "");
+}
+
+function render() {
+  const root = rootEl();
+  if (!root) return;
+  const prevKey = focusKey(document.activeElement);
+  const msg = toast;
+  toast = "";
+  let body;
+  if (screen === "goals") body = headerView() + goalsView();
+  else if (screen === "history") body = headerView() + historyView();
+  else if (screen === "capsule") body = headerView() + capsuleView();
+  else if (screen === "rewards") body = headerView() + rewardsView();
+  else body = headerView() + todayView();
+
+  root.innerHTML =
+    `<div role="status" aria-live="polite">${msg ? `<div class="toast">${esc(msg)}</div>` : ""}</div>` +
+    `<div id="panel" role="tabpanel">${body}</div>` +
+    navView() +
+    `<div class="savebar"><span id="savestatus" role="status" aria-live="polite"></span></div>`;
+
+  if (prevKey) {
+    try {
+      const again = root.querySelector(prevKey);
+      if (again && again.focus) again.focus({ preventScroll: true });
+    } catch { /* selector may not survive a tab change; harmless */ }
+  }
+  if (saveState.kind !== "idle") setSaveStatus(saveState.kind);
+}
+
+/* --- events --------------------------------------------------------------- */
+
+function onClick(e) {
+  const el = e.target.closest ? e.target.closest("[data-action]") : null;
+  if (!el || el.hasAttribute("disabled")) return;
+  const action = el.getAttribute("data-action");
+  const id = el.getAttribute("data-id");
+  switch (action) {
+    case "nav":
+      screen = el.getAttribute("data-nav");
+      if (screen === "today") { editDate = todayStr(); draft = null; }
+      goalDraft = null; capsuleDraft = null; confirmDelete = false; showExport = false;
+      return render();
+    case "prev-day":  readInputs(); editDate = addDays(editDate, -1); draft = null; confirmDelete = false; return render();
+    case "next-day":  if (editDate < todayStr()) { readInputs(); editDate = addDays(editDate, 1); draft = null; confirmDelete = false; } return render();
+    case "jump-today": editDate = todayStr(); draft = null; confirmDelete = false; return render();
+    case "set-rating": readInputs(); draft.rating = parseInt(el.getAttribute("data-rate"), 10) || 0; return render();
+    case "goal-toggle":
+      readInputs();
+      draft.goalsDone.has(id) ? draft.goalsDone.delete(id) : draft.goalsDone.add(id);
+      return render();
+    case "quest-toggle": readInputs(); draft.quest = !draft.quest; return render();
+    case "gc-add":
+      readInputs();
+      draft.goalCounts[id] = clamp((draft.goalCounts[id] || 0) + (parseInt(el.getAttribute("data-add"), 10) || 0), 0, 1000000);
+      return render();
+    case "step-add": readInputs(); draft.steps = clamp(draft.steps + (parseInt(el.getAttribute("data-add"), 10) || 0), 0, 500000); return render();
+    case "step-clear": ensureDraft(); draft.steps = 0; return render();
+    case "save-day": return saveDay();
+    case "delete-ask": confirmDelete = true; return render();
+    case "delete-cancel": confirmDelete = false; return render();
+    case "delete-day": return deleteDay();
+    case "goal-add-start": goalDraft = { name: "", icon: "star", type: "check", target: 20, unit: "minutes" }; return render();
+    case "goal-cancel": goalDraft = null; return render();
+    case "goal-icon": readGoalDraft(); goalDraft.icon = el.getAttribute("data-icon"); return render();
+    case "goal-type": readGoalDraft(); goalDraft.type = el.getAttribute("data-type") === "count" ? "count" : "check"; return render();
+    case "goal-save": {
+      readGoalDraft();
+      const name = (goalDraft.name || "").trim();
+      if (name) {
+        const g = { id: newId("g"), name: name.slice(0, 40), icon: goalDraft.icon || "star", type: goalDraft.type };
+        if (g.type === "count") { g.target = clamp(goalDraft.target || 10, 1, 100000); g.unit = (goalDraft.unit || "").slice(0, 16); }
+        state.goals.push(g);
+        goalDraft = null;
+        awardBadges(state);
+        save();
+      }
+      return render();
+    }
+    case "goal-remove":
+      state.goals = state.goals.filter((g) => g.id !== id);
+      if (draft) draft.goalsDone.delete(id);
+      save();
+      return render();
+    case "stepgoal-set": {
+      const el2 = $("stepgoal");
+      if (el2) { state.stepGoal = clamp(parseInt(el2.value || "8000", 10) || 8000, 100, 100000); save(); }
+      return render();
+    }
+    case "view-day": editDate = el.getAttribute("data-date"); screen = "today"; draft = null; confirmDelete = false; return render();
+    case "set-name": {
+      const el2 = $("nameinput");
+      if (el2) { state.name = (el2.value || "Ricky").slice(0, 24) || "Ricky"; save(); }
+      return render();
+    }
+    case "capsule-start": capsuleDraft = { text: "", openOn: addDays(todayStr(), 30) }; return render();
+    case "capsule-cancel": capsuleDraft = null; return render();
+    case "capsule-save": {
+      readCapsuleDraft();
+      const c = sanitizeCapsule({ id: newId("c"), text: capsuleDraft.text, openOn: capsuleDraft.openOn, createdOn: todayStr() });
+      if (c && state.capsules.length < 20) {
+        state.capsules.push(c);
+        capsuleDraft = null;
+        const won = awardBadges(state);
+        toast = won.length ? "New badge: " + won.map((b) => b.name).join(", ") + "!" : "Sealed! See you on " + prettyDate(c.openOn) + ".";
+        save();
+      } else if (!c) {
+        toast = "Write something and pick a day first.";
+      }
+      return render();
+    }
+    case "capsule-remove": state.capsules = state.capsules.filter((c) => c.id !== id); save(); return render();
+    case "export-open": showExport = true; return render();
+    case "export-close": showExport = false; return render();
+    case "export-copy": {
+      const box = $("exportdata");
+      if (box) {
+        box.select();
+        const done = () => { toast = "Copied! Paste it somewhere safe."; render(); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(box.value).then(done, () => {
+            toast = "Couldn't copy automatically — the text is selected, copy it yourself.";
+            render();
+          });
+        } else {
+          toast = "The text is selected — copy it with your keyboard.";
+          render();
+        }
+      }
+      return;
+    }
+    case "privacy":
+      state.settings.notePrivacy = el.getAttribute("data-mode") === "minimal" ? "minimal" : "summary";
+      lastNoteText = null; // force the note text to be rewritten once
+      save();
+      return render();
+  }
+}
+
+/* Space/Enter on the custom checkbox and radio widgets. Native <button>
+   already fires click on Enter; this adds Space for role=checkbox/radio. */
+function onKeyDown(e) {
+  if (e.key !== " " && e.key !== "Spacebar") return;
+  const el = e.target.closest ? e.target.closest('[role="checkbox"],[role="radio"]') : null;
+  if (!el) return;
+  e.preventDefault();
+  el.click();
+}
+
+function onChange(e) {
+  const el = e.target;
+  if (!el || !el.id) return;
+  if (el.id === "editdate") {
+    const v = el.value;
+    if (isDateStr(v)) {
+      editDate = v > todayStr() ? todayStr() : v;
+      draft = null;
+      confirmDelete = false;
+      render();
+    }
+    return;
+  }
+  if (el.id.indexOf("gc_") === 0) { readInputs(); render(); }
+}
+
+/* --- boot ----------------------------------------------------------------- */
+
+function start() {
+  document.addEventListener("click", onClick);
+  document.addEventListener("change", onChange);
+  document.addEventListener("keydown", onKeyDown);
+  render();
+  const fail = $("bootfail");
+  if (fail && fail.parentNode) fail.parentNode.removeChild(fail); // we booted fine
+  window.__day = { state: () => state, screen: () => screen, editDate: () => editDate };
+}
+
+let booted = false;
+function bootOnce() {
+  if (booted) return;
+  booted = true;
+  try {
+    start();
+  } catch (err) {
+    console.error("My Day: failed to start", err);
+    const root = rootEl();
+    if (root) {
+      root.innerHTML =
+        '<div class="card"><h2>My Day hit a problem</h2>' +
+        '<p class="small">Something went wrong while starting up. Your saved data has not been touched. ' +
+        'Try reloading; if it keeps happening, check the browser console for the error.</p></div>';
+    }
+  }
+}
+
+if (inSN) {
+  O.default.initialize();
+  O.default.subscribe(() => {
+    if (booted) return;
+    const meta = O.default.extensionMeta;
+    if (meta && meta.version) loadState(meta);
+    bootOnce();
+  });
+  // If Standard Notes never streams the note, start anyway rather than hang.
+  setTimeout(bootOnce, 1500);
+} else {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) loadState(JSON.parse(raw));
+  } catch (err) {
+    console.error("My Day: could not read local data", err);
+  }
+  bootOnce();
+}
+})();
+  </script>
 </body>
 </html>
